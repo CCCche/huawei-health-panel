@@ -5,6 +5,7 @@
   <p>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
     <a href="#环境要求"><img src="https://img.shields.io/badge/Android-API%2031%2B%20(arm64--v8a)-3DDC84.svg" alt="Android" /></a>
+    <a href="#环境要求"><img src="https://img.shields.io/badge/Root-Required-red.svg" alt="Root Required" /></a>
     <a href="https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.2"><img src="https://img.shields.io/badge/Release-v1.0.2-orange.svg" alt="Release v1.0.2" /></a>
   </p>
 </div>
@@ -12,6 +13,9 @@
 <p align="center">
   <img src="docs/assets/preview.webp" alt="Health Panel 界面与功能介绍" width="100%" />
 </p>
+
+> [!IMPORTANT]
+> **使用前提：需要 Root 权限。** 本应用自动读取本机「华为运动健康」数据库（`hihealth_003.db`）并恢复 SQLCipher 密钥需要 Android 设备已获取 **Root 权限**（如 Magisk / KernelSU / APatch）；未 Root 设备无法直接同步本机数据，仅支持手动导入已准备好的本地数据库文件。
 
 ---
 
