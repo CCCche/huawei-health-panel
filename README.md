@@ -1,10 +1,17 @@
-# Huawei Health Panel & Local MCP (`huawei-health-panel`)
+<div align="center">
+  <img src="docs/assets/icon.png" alt="Health Panel Icon" width="112" />
+  <h1>Health Panel</h1>
+  <p>离线隐私优先的华为运动健康 Android 本地面板（Apple Health / ColorOS 风格容器动效与 Liquid Glass UI）+ 内置本机只读 MCP Server。</p>
+  <p>
+    <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+    <a href="#环境要求"><img src="https://img.shields.io/badge/Android-API%2031%2B%20(arm64--v8a)-3DDC84.svg" alt="Android" /></a>
+    <a href="https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.2"><img src="https://img.shields.io/badge/Release-v1.0.2-orange.svg" alt="Release v1.0.2" /></a>
+  </p>
+</div>
 
-> 离线隐私优先的华为运动健康 Android 本地面板（Apple Health / ColorOS 风格容器动效与 Liquid Glass UI）+ 内置本机只读 MCP Server。
-
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Android](https://img.shields.io/badge/Android-API%2031%2B%20(arm64--v8a)-3DDC84.svg)](#环境要求)
-[![Release](https://img.shields.io/badge/Release-v1.0.2-orange.svg)](https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.2)
+<p align="center">
+  <img src="docs/assets/preview.webp" alt="Health Panel 界面与功能介绍" width="100%" />
+</p>
 
 ---
 
@@ -58,6 +65,9 @@
 ├── .gitignore
 ├── decrypt_db.py                    # 独立 SQLCipher 4.9.0 离线解密与密钥恢复脚本
 ├── docs/
+│   ├── assets/
+│   │   ├── icon.png                 # 应用图标
+│   │   └── preview.webp             # README 功能概览介绍图
 │   └── PROJECT_UPDATE_PLAN.md       # 功能迭代与架构演进记录
 └── android-app/
     ├── README.md                    # Android 工程说明与测试命令
