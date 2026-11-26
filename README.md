@@ -4,7 +4,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Android](https://img.shields.io/badge/Android-API%2031%2B%20(arm64--v8a)-3DDC84.svg)](#环境要求)
-[![Release](https://img.shields.io/badge/Release-v1.0.0-orange.svg)](https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.0)
+[![Release](https://img.shields.io/badge/Release-v1.0.2-orange.svg)](https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.2)
 
 ---
 
@@ -16,7 +16,7 @@
 - **多维度健康看板与 Pro Insights**：
   - **摘要（Summary）**：今日活动三环、训练准备度（Readiness）、昨夜睡眠、静息心率、HRV、血氧、呼吸频率、皮肤温度与重点趋势卡片。
   - **训练（Workouts）**：按运动类型/时间检索记录、训练分段（Splits）、心率区间分布、跑姿指标与地图轨迹查看（支持高德 / Esri 瓦片白名单策略）。
-  - **科学睡眠与小睡 / 心电图（ECG）**：夜间睡眠分期结构、小睡汇总，以及 ECG 心电记录状态与波形查看。
+  - **科学睡眠与小睡 / 心电图（ECG）**：夜间睡眠分期结构、小睡汇总、ECG 心电记录与波形查看（支持拖动隐藏游标、点按显示读数），以及本地单导联波形节律识别算法（窦性心律/心动过缓/心动过速/心律不齐/疑似房早室早/疑似房颤与信号质量评估）。
   - **深度洞察（Pro Insights）**：急性/慢性训练负荷比（ACWR）、睡眠与生理指标相关性分析、有氧效率趋势等。
   - **JSON 导出**：支持将当前本地汇总数据导出查看或备份。
 - **Liquid Glass 视觉与 ColorOS 风格容器变换动效**：
@@ -43,7 +43,7 @@
 
 ### 3. 配套独立解密工具与工程模块
 - [`decrypt_db.py`](decrypt_db.py)：独立 Python CLI 工具，支持通过 OpenSSL `libcrypto`（`ctypes`）离线解密华为运动健康 `hihealth_003.db`（SQLCipher 4：`PBKDF2-HMAC-SHA512`、`page_size=4096`、`reserve=80`），并可选 `--recover-key` 与 `--verify-all-hmac`。
-- [`android-app/panel`](android-app/panel)：核心主面板 APK（Kotlin + Chaquopy Python 3.12 + WebView + MCP Server），`v1.0.0`（`versionCode = 22`）。
+- [`android-app/panel`](android-app/panel)：核心主面板 APK（Kotlin + Chaquopy Python 3.12 + WebView + MCP Server），`v1.0.2`（`versionCode = 24`）。
 - [`android-app/offline`](android-app/offline)：轻量原生离线壳模块（Jetpack Compose + COUI-Kit + C 原生密钥恢复助推器）。
 - [`android-app/app`](android-app/app)：早期示例容器模块（已脱敏，域名与路径均为示例占位）。
 
@@ -92,7 +92,7 @@
 ## 快速开始
 
 ### 方式一：直接安装 Release APK（推荐）
-1. 前往 [Releases v1.0.0](https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.0) 下载 `health-panel-v1.0.0-vc22.apk`。
+1. 前往 [Releases v1.0.2](https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.2) 下载 `health-panel-v1.0.2-vc24.apk`。
 2. 在手机安装后打开 **Health Panel**：
    - 若设备已 Root 且安装有华为运动健康，点击同步即可自动定位/恢复密钥并解密导入 `hihealth_003.db`；
    - 或手动选择本地数据库副本进行导入分析。
@@ -174,9 +174,16 @@ cd android-app
 
 ---
 
-## 更新日志（`v1.0.0`）
+## 更新日志
 
-- 首次公开发布 `:panel` 稳定版 `v1.0.0`（`versionCode = 22`）。
+### `v1.0.2`（`versionCode = 24`）
+- **应用品牌与图标焕新**：桌面应用名称统一改为 **`Health Panel`**，启用全新渐变圆角矩形自适应图标（`@mipmap/ic_launcher` / `@mipmap/ic_launcher_round`）及对应内嵌应用图标 `icon.png`。
+- **心电图本地波形节律识别算法**：在 ECG 详情页新增独立「波形算法识别」卡片（Python 后端 + JS 示例波形分析），支持识别窦性心律、窦性心动过缓、窦性心动过速、窦性心律不齐、疑似房性/室性早搏、疑似心房颤动及信号质量评估。
+- **心电图交互逻辑重构**：横向拖动/缩放波形时自动隐藏选中竖线并实时展示可见时间窗，单击波形时精确显示选中竖线与 `s · mV` 读数；解除心电图区域的横向双滚动冲突。
+- **卡片开合动效全链路帧率优化**：容器变换改由 Web Animations API（合成器线程）驱动、记忆化 React 玻璃卡片挂载并延迟非过渡期 SVG 位移贴图重建、移除全局通配 CSS 选择器并将 WebView 底色调整为不透明主题色，显著减少掉帧。
+
+### `v1.0.0`（`versionCode = 22`）
+- 首次公开发布 `:panel` 稳定版 `v1.0.0`。
 - 修复底部导航栏在紧凑态按下触发位移及卡片收起动画尾段吞事件导致偶发需要“点两下才切页”的问题，实现单击直达与横向拖拽平滑跟手。
 - 修复列表滚动期间的手势监听作用域回归，稳定 ColorOS 风格卡片打开/关闭容器变换动画，消除元素闪烁与快速位移问题。
 - 完成敏感配置隔离与仓库示例路径/域名脱敏。

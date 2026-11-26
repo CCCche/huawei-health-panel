@@ -6,7 +6,7 @@
   <meta id="theme-color-meta" name="theme-color" content="#F2F2F7">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <title>健康 · 个人健康面板</title>
+  <title>Health Panel</title>
   <script>
     (function () {
       var docEl = document.documentElement;
@@ -43,9 +43,9 @@
     })();
   </script>
   <link rel="manifest" href="/manifest.json">
-  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="icon" type="image/png" href="/icon.png?v=1">
   <link rel="stylesheet" href="/static/dashboard-glass.css?v=1">
-  <link rel="stylesheet" href="/static/style.css?v=87">
+  <link rel="stylesheet" href="/static/style.css?v=89">
   <link rel="stylesheet" href="/static/vendor/leaflet.css">
 </head>
 <body>
@@ -66,9 +66,9 @@
     <aside class="sidebar" aria-label="主导航">
       <div class="sidebar-top">
         <div class="sidebar-brand">
-          <img src="/icon.svg" alt="健康">
+          <img src="/icon.png?v=1" alt="Health Panel">
           <div>
-            <div class="brand-name">健康</div>
+            <div class="brand-name">Health Panel</div>
             <div class="brand-sub" id="sidebar-sync-text">已同步</div>
           </div>
         </div>
@@ -109,7 +109,7 @@
     <!-- 移动端悬浮液态玻璃顶栏（仅在主 Tab 显示） -->
     <header id="mobile-header" class="mobile-header liquid-glass">
       <div class="mobile-header-left">
-        <img src="/icon.svg" alt="" class="mobile-brand-icon">
+        <img src="/icon.png?v=1" alt="" class="mobile-brand-icon">
         <span id="mobile-page-title" class="mobile-page-title">摘要</span>
       </div>
       <div class="mobile-header-right">
@@ -491,8 +491,8 @@
     <div class="onboarding-surface">
       <div class="onboarding-scroll">
         <div class="onboarding-hero">
-          <img src="/icon.svg" alt="健康" class="onboarding-logo">
-          <h2 id="onboarding-title" class="onboarding-title">欢迎使用健康面板</h2>
+          <img src="/icon.png?v=1" alt="Health Panel" class="onboarding-logo">
+          <h2 id="onboarding-title" class="onboarding-title">欢迎使用 Health Panel</h2>
           <p class="onboarding-sub">100% 本地离线 · Apple Health 风格健康看板</p>
           <div id="onboarding-live-strip" class="onboarding-live-strip">
             <span class="onboarding-live-dot"></span>
@@ -588,7 +588,7 @@
   <div id="toast" class="toast liquid-glass hidden" role="status" aria-live="polite"></div>
 
   <script src="/static/vendor/leaflet.js"></script>
-  <script defer src="/static/dashboard-glass.js?v=11"></script>
-  <script src="/static/app.js?v=83"></script>
+  <script defer src="/static/dashboard-glass.js?v=12"></script>
+  <script src="/static/app.js?v=86"></script>
 </body>
 </html>

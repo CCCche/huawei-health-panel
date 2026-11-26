@@ -89,3 +89,9 @@ PYTHONPATH=android-app/panel/src/main/python python3 -m unittest discover -s and
 - **容器变换转场与滚动交互稳定**：卡片打开/关闭采用 ColorOS 风格容器变换（源卡片与浮层 `sheet` 全程几何与不透明度交接），修复滚动手势监听作用域与过渡期间的闪烁问题。
 - **底栏直达点击与拖拽手势**：移除按下即触发布局收缩的位移抖动，增强水平拖拽判定阈值，并放行卡片收起尾段对底栏的点击切换，避免“连点两下才切页”。
 - **离线全本地数据链路 + 只读 MCP Server**：内置 Chaquopy Python 3.12 + SQLCipher 4 兼容解密同步引擎、高/低功耗生理指标与心电/睡眠/训练详情，并提供本机只读 `127.0.0.1` MCP 服务供 AI 客户端接入。
+
+## 1.0.2 · Health Panel 更新
+
+- 应用名称与自适应图标升级为 **`Health Panel`**，同步 `PanelMcpService` 通知与 `PanelMcpProtocol` 服务端版本号（`1.0.2`）。
+- 卡片展开/收起容器变换改用 Web Animations API 合成器动画，优化 React 玻璃图层与 CSS 样式范围以提升过渡帧率。
+- 心电图详情页新增拖动隐藏游标、单击显示采样竖线交互，并内置本地轻量单导联心电节律分类识别算法卡片。

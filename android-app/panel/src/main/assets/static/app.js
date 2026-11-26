@@ -1254,6 +1254,7 @@
   const originByDepth = new Map();
   let activeCt = null;
   let prewarmingCt = false;
+  let pendingPostTransitionResize = false;
   const CT_OPEN_DURATION = 380;
   const CT_OPEN_BEZIER = [0.22, 0.90, 0.24, 1];
   const CT_CLOSE_DURATION = 340;
@@ -1283,7 +1284,16 @@
   }
 
   function syncCtAnimatingClass() {
-    document.documentElement.classList.toggle("ct-animating", Boolean(activeCt || document.querySelector(".ct-sheet-layer")));
+    const wasAnimating = document.documentElement.classList.contains("ct-animating");
+    const isAnimating = Boolean(activeCt || document.querySelector(".ct-sheet-layer"));
+    document.documentElement.classList.toggle("ct-animating", isAnimating);
+    if (wasAnimating && !isAnimating) {
+      window.dispatchEvent(new Event("ct-transition-end"));
+      if (pendingPostTransitionResize) {
+        pendingPostTransitionResize = false;
+        requestAnimationFrame(resizeAllCharts);
+      }
+    }
   }
 
   // App history restores views asynchronously. Browser restoration can race
@@ -1497,7 +1507,19 @@
     return rect ? { rect, radius: originMeta.radius } : null;
   }
 
+  function cancelSheetAnimations(sheet) {
+    if (Array.isArray(sheet?._ctAnims)) {
+      sheet._ctAnims.forEach((anim) => {
+        anim.onfinish = null;
+        try { anim.cancel(); } catch (_) {}
+      });
+      sheet._ctAnims = null;
+    }
+  }
+
   function resetCardSheet(sheet) {
+    if (!sheet) return;
+    cancelSheetAnimations(sheet);
     sheet.classList.remove("ct-sheet-layer", "ct-at-top", "ct-preserve-glass");
     sheet.style.transformOrigin = "";
     sheet.style.transform = "";
@@ -1520,6 +1542,8 @@
         const { sheet } = transition;
         const pose = transition.getPose();
         const elapsed = transition.getElapsed();
+        transition.pinPose?.(pose);
+        transition.cancelAnims?.();
         held = { sheet, pose, elapsed };
       }
       transition.finish(held === null);
@@ -1542,28 +1566,62 @@
       held ? Math.max(90, Math.min(CT_CLOSE_DURATION, held.elapsed)) : CT_CLOSE_DURATION;
     const bezier = opening ? CT_OPEN_BEZIER : CT_CLOSE_BEZIER;
 
-    let currentPose = { ...startPose };
     let startTime = null;
     let waitFrames = 0;
 
+    const formatClipPath = (pose) =>
+      `inset(${pose.t.toFixed(2)}px ${pose.r.toFixed(2)}px ${pose.b.toFixed(2)}px ${pose.l.toFixed(2)}px round ${pose.rad.toFixed(2)}px)`;
+    const formatScale = (s) => `scale(${s.toFixed(5)})`;
+
     const applyPose = (pose) => {
-      currentPose = pose;
-      sheet.style.clipPath = `inset(${pose.t.toFixed(2)}px ${pose.r.toFixed(2)}px ${pose.b.toFixed(2)}px ${pose.l.toFixed(2)}px round ${pose.rad.toFixed(2)}px)`;
-      sheet.style.transform = `scale(${pose.s.toFixed(5)})`;
+      sheet.style.clipPath = formatClipPath(pose);
+      sheet.style.transform = formatScale(pose.s);
       sheet.style.opacity = pose.op.toFixed(4);
     };
 
+    const computePoseAt = (elapsedMs) => {
+      if (startTime === null) return { ...startPose };
+      const u = Math.max(0, Math.min(1, elapsedMs / duration));
+      const p = solveCubicBezierY(u, bezier[0], bezier[1], bezier[2], bezier[3]);
+      const lerp = (a, b) => a + (b - a) * p;
+      let op;
+      if (held) {
+        const k = solveCubicBezierY(u, 0.25, 0.46, 0.45, 0.94);
+        op = startPose.op * (1 - k);
+      } else if (opening) {
+        op = u >= 0.32 ? 1 : solveCubicBezierY(u / 0.32, 0.22, 1, 0.36, 1);
+      } else if (u <= 0.22) {
+        op = 1;
+      } else if (u >= 0.88) {
+        op = 0;
+      } else {
+        const k = solveCubicBezierY((u - 0.22) / 0.66, 0.42, 0, 0.58, 1);
+        op = 1 - k;
+      }
+      return {
+        t: lerp(startPose.t, endPose.t),
+        r: lerp(startPose.r, endPose.r),
+        b: lerp(startPose.b, endPose.b),
+        l: lerp(startPose.l, endPose.l),
+        rad: lerp(startPose.rad, endPose.rad),
+        s: lerp(startPose.s, endPose.s),
+        op,
+      };
+    };
+
+    cancelSheetAnimations(sheet);
     document.documentElement.classList.add("ct-animating");
     applyPose(startPose);
-    void sheet.offsetWidth;
 
     const transition = {
       sheet,
       opening,
       frameId: 0,
       timer: null,
-      getPose: () => ({ ...currentPose }),
       getElapsed: () => (startTime === null ? 0 : Math.max(0, performance.now() - startTime)),
+      getPose: () => computePoseAt(transition.getElapsed()),
+      pinPose: applyPose,
+      cancelAnims: () => cancelSheetAnimations(sheet),
       finish: (commit) => {
         try {
           finish(commit);
@@ -1584,36 +1642,59 @@
     const step = (now) => {
       if (activeCt !== transition) return;
       if (startTime === null) startTime = now;
-      const u = Math.max(0, Math.min(1, (now - startTime) / duration));
-      const p = solveCubicBezierY(u, bezier[0], bezier[1], bezier[2], bezier[3]);
-      const lerp = (a, b) => a + (b - a) * p;
-      let op;
-      if (held) {
-        op = startPose.op * (1 - u) * (1 - u);
-      } else if (opening) {
-        const k = Math.min(1, u / 0.32);
-        op = 1 - (1 - k) * (1 - k);
-      } else if (u <= 0.22) {
-        op = 1;
-      } else if (u >= 0.88) {
-        op = 0;
-      } else {
-        const k = (u - 0.22) / 0.66;
-        op = 1 - k * k * (3 - 2 * k);
-      }
-      applyPose({
-        t: lerp(startPose.t, endPose.t),
-        r: lerp(startPose.r, endPose.r),
-        b: lerp(startPose.b, endPose.b),
-        l: lerp(startPose.l, endPose.l),
-        rad: lerp(startPose.rad, endPose.rad),
-        s: lerp(startPose.s, endPose.s),
-        op,
-      });
-      if (u < 1) {
+      const elapsed = now - startTime;
+      applyPose(computePoseAt(elapsed));
+      if (elapsed < duration) {
         transition.frameId = requestAnimationFrame(step);
       } else {
         complete();
+      }
+    };
+
+    const launch = (now) => {
+      if (activeCt !== transition) return;
+      clearTimeout(transition.timer);
+      startTime = now;
+      if (typeof sheet.animate === "function") {
+        const easingStr = `cubic-bezier(${bezier[0]}, ${bezier[1]}, ${bezier[2]}, ${bezier[3]})`;
+        const geomAnim = sheet.animate(
+          [
+            { clipPath: formatClipPath(startPose), transform: formatScale(startPose.s) },
+            { clipPath: formatClipPath(endPose), transform: formatScale(endPose.s) },
+          ],
+          { duration, easing: easingStr, fill: "both" },
+        );
+        let opKeyframes;
+        if (held) {
+          opKeyframes = [
+            { opacity: startPose.op, easing: "cubic-bezier(0.25, 0.46, 0.45, 0.94)" },
+            { opacity: 0 },
+          ];
+        } else if (opening) {
+          opKeyframes = [
+            { opacity: 0, offset: 0, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+            { opacity: 1, offset: 0.32 },
+            { opacity: 1, offset: 1 },
+          ];
+        } else {
+          opKeyframes = [
+            { opacity: 1, offset: 0 },
+            { opacity: 1, offset: 0.22, easing: "ease-in-out" },
+            { opacity: 0, offset: 0.88 },
+            { opacity: 0, offset: 1 },
+          ];
+        }
+        const opAnim = sheet.animate(opKeyframes, { duration, fill: "both" });
+        cancelSheetAnimations(sheet);
+        sheet._ctAnims = [geomAnim, opAnim];
+        sheet.style.clipPath = "";
+        sheet.style.transform = "";
+        sheet.style.opacity = "";
+        geomAnim.onfinish = complete;
+        transition.timer = setTimeout(complete, duration + 250);
+      } else {
+        transition.frameId = requestAnimationFrame(step);
+        transition.timer = setTimeout(complete, duration + 300);
       }
     };
 
@@ -1623,12 +1704,12 @@
       waitFrames += 1;
       if (opening) {
         const hasPendingGlass = Boolean(sheet.querySelector(CT_GLASS_PENDING_SELECTOR));
-        if (!openGlassSettled && (!hasPendingGlass || waitFrames >= 4)) {
+        if (!openGlassSettled && (!hasPendingGlass || waitFrames >= 3)) {
           openGlassSettled = true;
           transition.frameId = requestAnimationFrame(waitBeforeStart);
           return;
         }
-        if (!openGlassSettled && waitFrames < 5) {
+        if (!openGlassSettled && waitFrames < 4) {
           transition.frameId = requestAnimationFrame(waitBeforeStart);
           return;
         }
@@ -1636,12 +1717,11 @@
         transition.frameId = requestAnimationFrame(waitBeforeStart);
         return;
       }
-      startTime = now;
-      transition.frameId = requestAnimationFrame(step);
+      launch(now);
     };
 
     transition.frameId = requestAnimationFrame(waitBeforeStart);
-    transition.timer = setTimeout(complete, duration + 300);
+    transition.timer = setTimeout(complete, duration + 450);
   }
 
   // Source cards and dock buttons remain visible behind the moving sheet.
@@ -1656,7 +1736,7 @@
 
   function runContainerOpenTransition({ targetEl, originMeta, prepare, onFinish }) {
     cancelActiveTransition();
-    window.__clearGlassTouchLight?.();
+    window.__clearGlassTouchLight?.(true);
     window.__panelPtr?.onCancelDrag?.();
     const rect = clampRectToViewport(originMeta?.rect, window.innerWidth, window.innerHeight);
     if (!canUseContainerTransform() || !rect || !targetEl) {
@@ -1689,7 +1769,7 @@
   }
 
   function runContainerCloseTransition({ closingEl, keepTabWorkoutsMounted, originMeta, held, onFinish }) {
-    window.__clearGlassTouchLight?.();
+    window.__clearGlassTouchLight?.(true);
     window.__panelPtr?.onCancelDrag?.();
     const origin = resolveOriginForClose(originMeta);
     const finish = () => {
@@ -2056,7 +2136,10 @@
       }
     }
 
-    if (!restoringNavigation || tabDidRender) setTimeout(resizeAllCharts, 45);
+    if (!restoringNavigation || tabDidRender) {
+      if (opts.keepClosingEl || activeCt) pendingPostTransitionResize = true;
+      else setTimeout(resizeAllCharts, 45);
+    }
   }
 
   document.querySelectorAll(".nav-item, .bottom-tab-btn").forEach((btn) => {
@@ -5046,10 +5129,290 @@
     });
   }
 
+  const ECG_ALGO_DISCLAIMER = "基于单导联 R 波与 RR 间期特征的本地轻量算法分析，仅供参考，不构成医疗诊断。";
+
+  function analyzeEcgWaveform(samples, sampleRateHz) {
+    const res = (type, label, tone, summary, extra = {}) => ({
+      type,
+      label,
+      tone,
+      bpm: extra.bpm ?? null,
+      beat_count: extra.beat_count ?? null,
+      median_rr_ms: extra.median_rr_ms ?? null,
+      cv_rr_pct: extra.cv_rr_pct ?? null,
+      qrs_ms: extra.qrs_ms ?? null,
+      premature_count: extra.premature_count ?? 0,
+      summary,
+      disclaimer: ECG_ALGO_DISCLAIMER,
+    });
+    const hz = Number(sampleRateHz);
+    if (!Array.isArray(samples) || !samples.length || !Number.isFinite(hz) || hz < 100 || hz > 2000 || samples.length < Math.round(4 * hz)) {
+      return res("signal_too_short", "采样过短 / 无法识别", "muted", "有效记录时长不足 4 秒，无法可靠识别节律。");
+    }
+    const quantile = (sorted, q) => {
+      if (!sorted.length) return 0;
+      if (sorted.length === 1) return sorted[0];
+      const pos = Math.max(0, Math.min(1, q)) * (sorted.length - 1);
+      const lo = Math.floor(pos);
+      const hi = Math.min(sorted.length - 1, lo + 1);
+      return sorted[lo] + (sorted[hi] - sorted[lo]) * (pos - lo);
+    };
+    const movingAvg = (arr, win) => {
+      const len = arr.length;
+      if (!len || win <= 1) return arr.slice();
+      const half = win >> 1;
+      const prefix = new Float64Array(len + 1);
+      for (let i = 0; i < len; i++) prefix[i + 1] = prefix[i] + arr[i];
+      const out = new Float64Array(len);
+      for (let i = 0; i < len; i++) {
+        const lo = i < half ? 0 : i - half;
+        const hi = i + half + 1 > len ? len : i + half + 1;
+        out[i] = (prefix[hi] - prefix[lo]) / (hi - lo);
+      }
+      return out;
+    };
+
+    const n = samples.length;
+    const clean = new Float64Array(n);
+    let badCount = 0;
+    for (let i = 0; i < n; i++) {
+      const v = samples[i];
+      if (typeof v === "number" && Number.isFinite(v)) {
+        clean[i] = v;
+        if (Math.abs(v) > 4.5) badCount += 1;
+      } else {
+        badCount += 1;
+      }
+    }
+    if (badCount / n > 0.10) {
+      return res("poor_signal", "信号质量不佳", "warn", "检测到较多超量程或无效采样点，建议贴合电极后重测。");
+    }
+
+    const baseWin = Math.max(3, Math.round(0.20 * hz) | 1);
+    const baseline = movingAvg(clean, baseWin);
+    const hp = new Float64Array(n);
+    for (let i = 0; i < n; i++) hp[i] = clean[i] - baseline[i];
+
+    const edge = Math.min(n >> 2, Math.max(1, Math.round(0.25 * hz)));
+    const limitHi = n - edge;
+    let maxIntAmp = 0;
+    for (let i = edge; i < limitHi; i++) {
+      const a = Math.abs(hp[i]);
+      if (a > maxIntAmp) maxIntAmp = a;
+    }
+    if (maxIntAmp < 0.08) {
+      return res("poor_signal", "信号质量不佳", "warn", "波形幅值过弱或接近直线，未检测到有效心电信号。");
+    }
+
+    const lpWin = Math.max(1, Math.round(0.015 * hz) | 1);
+    const smooth = movingAvg(hp, lpWin);
+    const magD = new Float64Array(n);
+    for (let i = 1; i < n; i++) {
+      magD[i] = Math.abs(smooth[i] - smooth[i - 1]);
+    }
+    const intWin = Math.max(3, Math.round(0.10 * hz) | 1);
+    const env = movingAvg(magD, intWin);
+
+    const envInner = Array.from(env.subarray(edge, limitHi)).sort((a, b) => a - b);
+    const medEnv = quantile(envInner, 0.50);
+    const refEnv = quantile(envInner, 0.98);
+    const thresh = Math.max(medEnv + 0.30 * (refEnv - medEnv), 0.28 * refEnv, 1e-5);
+
+    const searchRad = Math.max(2, Math.round(0.08 * hz));
+    const refrac = Math.max(10, Math.round(0.24 * hz));
+    const rPeaks = [];
+    for (let i = edge; i < limitHi; ) {
+      if (env[i] < thresh) {
+        i += 1;
+        continue;
+      }
+      const segStart = i;
+      let bestEnvIdx = i;
+      let bestEnvVal = env[i];
+      while (i < limitHi && env[i] >= thresh) {
+        if (env[i] > bestEnvVal) {
+          bestEnvVal = env[i];
+          bestEnvIdx = i;
+        }
+        i += 1;
+      }
+      const winLo = Math.max(edge, Math.min(segStart, bestEnvIdx) - searchRad);
+      const winHi = Math.min(limitHi - 1, Math.max(i - 1, bestEnvIdx) + searchRad);
+      let rIdx = bestEnvIdx;
+      let bestAmp = -1;
+      for (let pos = winLo; pos <= winHi; pos++) {
+        const a = Math.abs(hp[pos]);
+        if (a > bestAmp) {
+          bestAmp = a;
+          rIdx = pos;
+        }
+      }
+      if (!rPeaks.length || rIdx - rPeaks[rPeaks.length - 1] >= refrac) {
+        rPeaks.push(rIdx);
+      } else if (Math.abs(hp[rIdx]) > Math.abs(hp[rPeaks[rPeaks.length - 1]])) {
+        rPeaks[rPeaks.length - 1] = rIdx;
+      }
+    }
+
+    if (rPeaks.length < 4) {
+      return res("inconclusive", "波形不明确 / 无法判定", "muted",
+        `仅识别出 ${rPeaks.length} 个清晰 QRS 波峰，尚不足以判定节律类型。`,
+        { beat_count: rPeaks.length });
+    }
+
+    const rawRr = [];
+    const validRr = [];
+    for (let k = 0; k < rPeaks.length - 1; k++) {
+      const rr = (rPeaks[k + 1] - rPeaks[k]) * 1000 / hz;
+      rawRr.push(rr);
+      if (rr >= 240 && rr <= 2400) validRr.push(rr);
+    }
+    if (validRr.length < 3) {
+      return res("inconclusive", "波形不明确 / 无法判定", "muted",
+        "有效 RR 间期数量不足，无法稳定识别心律类型。",
+        { beat_count: rPeaks.length });
+    }
+
+    const badRrRatio = (rawRr.length - validRr.length) / rawRr.length;
+    const quietRad = Math.max(2, Math.round(0.12 * hz));
+    let noiseSq = 0;
+    let noiseN = 0;
+    let peakPtr = 0;
+    for (let pos = edge; pos < limitHi; pos++) {
+      while (peakPtr < rPeaks.length && pos > rPeaks[peakPtr] + quietRad) peakPtr += 1;
+      if (peakPtr < rPeaks.length && pos >= rPeaks[peakPtr] - quietRad && pos <= rPeaks[peakPtr] + quietRad) continue;
+      noiseSq += hp[pos] * hp[pos];
+      noiseN += 1;
+    }
+    const rAmps = rPeaks.map((p) => Math.abs(hp[p])).sort((a, b) => a - b);
+    const medRAmp = quantile(rAmps, 0.50);
+    const noiseRms = noiseN > 0 ? Math.sqrt(noiseSq / noiseN) : 0;
+    if (badRrRatio > 0.30 || (noiseN >= hz && medRAmp > 0 && noiseRms > 0.45 * medRAmp)) {
+      return res("poor_signal", "信号干扰较大 / 建议重测", "warn",
+        "基线干扰或伪差较多，建议保持静止与干燥接触后重新采集。",
+        { beat_count: rPeaks.length });
+    }
+
+    const sRr = validRr.slice().sort((a, b) => a - b);
+    const medianRr = quantile(sRr, 0.50);
+    const meanRr = validRr.reduce((acc, v) => acc + v, 0) / validRr.length;
+    const stdRr = Math.sqrt(validRr.reduce((acc, v) => acc + (v - meanRr) ** 2, 0) / validRr.length);
+    const cvRr = meanRr > 0 ? stdRr / meanRr : 0;
+    const cvPct = Number((cvRr * 100).toFixed(1));
+    const iqrRatio = medianRr > 0 ? (quantile(sRr, 0.75) - quantile(sRr, 0.25)) / medianRr : 0;
+    const rangeRatio = medianRr > 0 ? (sRr[sRr.length - 1] - sRr[0]) / medianRr : 0;
+    const diffs = [];
+    for (let k = 0; k < validRr.length - 1; k++) diffs.push(Math.abs(validRr[k + 1] - validRr[k]));
+    const rmssdRatio = diffs.length && medianRr > 0
+      ? Math.sqrt(diffs.reduce((acc, d) => acc + d * d, 0) / diffs.length) / medianRr : 0;
+    const irregularStepRatio = diffs.length && medianRr > 0
+      ? diffs.filter((d) => d / medianRr > 0.15).length / diffs.length : 0;
+    const bpm = medianRr > 0 ? Math.round(60000 / medianRr) : 0;
+    const medianRrMs = Math.round(medianRr);
+
+    const maxHalf = Math.max(3, Math.round(0.14 * hz));
+    const beatQrs = rPeaks.map((p) => {
+      const cutoff = 0.20 * Math.abs(hp[p]);
+      let lo = p;
+      while (lo > edge && p - lo < maxHalf && Math.abs(hp[lo - 1]) >= cutoff) lo -= 1;
+      let hi = p;
+      while (hi < limitHi - 1 && hi - p < maxHalf && Math.abs(hp[hi + 1]) >= cutoff) hi += 1;
+      return Math.max(40, Math.min(220, (hi - lo) * 1000 / hz));
+    });
+    const medianQrs = Math.round(quantile(beatQrs.slice().sort((a, b) => a - b), 0.50));
+
+    const tmplRad = Math.max(3, Math.round(0.06 * hz));
+    const vecLen = tmplRad * 2 + 1;
+    const beatVecs = rPeaks.map((p) => (p - tmplRad >= 0 && p + tmplRad < n ? hp.subarray(p - tmplRad, p + tmplRad + 1) : null));
+    const validVecs = beatVecs.filter(Boolean);
+    let tmpl = null;
+    let tmplNorm = 0;
+    if (validVecs.length) {
+      tmpl = new Float64Array(vecLen);
+      for (let k = 0; k < vecLen; k++) {
+        tmpl[k] = quantile(validVecs.map((v) => v[k]).sort((a, b) => a - b), 0.50);
+      }
+      for (let k = 0; k < vecLen; k++) tmplNorm += tmpl[k] * tmpl[k];
+      tmplNorm = Math.sqrt(tmplNorm);
+    }
+    const beatCorr = beatVecs.map((vec) => {
+      if (!vec || !tmpl || tmplNorm <= 1e-9) return 1;
+      let vecNorm = 0;
+      let dot = 0;
+      for (let k = 0; k < vecLen; k++) {
+        vecNorm += vec[k] * vec[k];
+        dot += vec[k] * tmpl[k];
+      }
+      vecNorm = Math.sqrt(vecNorm);
+      return vecNorm <= 1e-9 ? 0 : dot / (vecNorm * tmplNorm);
+    });
+
+    let prematureCount = 0;
+    let widePrematureCount = 0;
+    const regularBaseline = iqrRatio < 0.14 && irregularStepRatio < 0.45;
+    if (regularBaseline && medianRr > 0) {
+      for (let idxRr = 0; idxRr < rawRr.length; idxRr++) {
+        const rr = rawRr[idxRr];
+        if (rr < 240 || rr > 2400) continue;
+        if (rr < 0.80 * medianRr) {
+          const nextRr = rawRr[idxRr + 1];
+          const hasPause = idxRr + 1 < rawRr.length && nextRr >= 240 && nextRr <= 2400 && nextRr > 1.12 * medianRr;
+          const bIdx = idxRr + 1;
+          const beatAberrant = beatCorr[bIdx] < 0.72 || beatQrs[bIdx] >= 120 || beatQrs[bIdx] > 1.35 * medianQrs;
+          if (hasPause || beatAberrant) {
+            prematureCount += 1;
+            if (beatAberrant) widePrematureCount += 1;
+          }
+        }
+      }
+    }
+
+    const common = {
+      bpm,
+      beat_count: rPeaks.length,
+      median_rr_ms: medianRrMs,
+      cv_rr_pct: cvPct,
+      qrs_ms: medianQrs,
+      premature_count: prematureCount,
+    };
+
+    if (irregularStepRatio >= 0.45 && (cvRr >= 0.14 || rmssdRatio >= 0.18) && iqrRatio >= 0.12) {
+      return res("afib_suspected", "疑似心房颤动（房颤）", "alert",
+        `RR 间期呈现明显绝对不规整（节律变异 ${cvPct.toFixed(1)}%，相邻突变占比 ${Math.round(irregularStepRatio * 100)}%），提示房颤节律特征。`,
+        common);
+    }
+    if (regularBaseline && prematureCount >= 1) {
+      const isPvc = widePrematureCount >= 1;
+      const desc = isPvc ? "伴畸形宽大 QRS 形态及代偿间歇" : "伴提前心搏及代偿间歇，QRS 形态与主导搏一致";
+      return res("premature_beat", isPvc ? "疑似室性早搏（早搏）" : "疑似房性早搏（早搏）", "warn",
+        `在规整基线心率（${bpm} 次/分）下检测到 ${prematureCount} 次提前搏动（${desc}）。`,
+        common);
+    }
+    if (bpm >= 50 && bpm <= 100 && prematureCount === 0 && irregularStepRatio < 0.45 && (cvRr >= 0.10 || rangeRatio >= 0.22)) {
+      return res("sinus_arrhythmia", "窦性心律不齐", "info",
+        `心率 ${bpm} 次/分处于正常区间，RR 间期呈渐进周期性波动（变异度 ${cvPct.toFixed(1)}%），符合窦性心律不齐特征。`,
+        common);
+    }
+    if (bpm < 50) {
+      return res("sinus_bradycardia", "窦性心动过缓", bpm < 45 ? "warn" : "info",
+        `识别平均心率约 ${bpm} 次/分（平均 RR ${medianRrMs} ms），节律规整，低于 50 次/分。`,
+        common);
+    }
+    if (bpm > 100) {
+      return res("sinus_tachycardia", "窦性心动过速", "warn",
+        `识别平均心率约 ${bpm} 次/分（平均 RR ${medianRrMs} ms），节律规整，高于 100 次/分。`,
+        common);
+    }
+    return res("sinus_rhythm", "窦性心律", "good",
+      `心率 ${bpm} 次/分，RR 间期规整（变异度 ${cvPct.toFixed(1)}%），符合窦性心律特征。`,
+      common);
+  }
+
   function renderEcgRecord(body, record, example = false) {
     const samples = record.waveform_mv || [];
     const hz = Number(record.sample_rate_hz);
     const hasWave = samples.length > 0 && Number.isFinite(hz) && hz > 0;
+    const analysis = hasWave ? (record.analysis || analyzeEcgWaveform(samples, hz)) : null;
     const dateLabel = (record.start_iso || "").slice(0, 16).replace("T", " ");
     const duration = record.duration_s ?? (hasWave ? samples.length / hz : null);
     const leadLabel = record.lead_count > 1 ? `${fmtNum(record.lead_count, 0)} 导联` : "I 导联";
@@ -5088,6 +5451,27 @@
         </div>
         ${hasWave && !example ? '<button type="button" id="ecg-export-report" class="ecg-export-report">导出心电图报告 <span aria-hidden="true">›</span></button>' : ""}
       </section>
+      ${analysis ? `<section class="card ecg-algo-card" aria-labelledby="ecg-algo-title">
+        <div class="ecg-algo-head">
+          <div class="ecg-algo-title-group">
+            <div class="ecg-algo-kicker-row">
+              <span class="ecg-algo-badge">波形算法识别</span>
+              <span class="ecg-algo-dot tone-${escapeHtml(analysis.tone || "muted")}" aria-hidden="true"></span>
+            </div>
+            <h2 class="card-title ecg-algo-title" id="ecg-algo-title">${escapeHtml(analysis.label)}</h2>
+          </div>
+          ${analysis.bpm == null ? "" : `<div class="ecg-result-rate"><strong>${fmtNum(analysis.bpm, 0)}</strong>
+            <small>识别 · 次/分</small></div>`}
+        </div>
+        ${analysis.beat_count != null ? `<div class="ecg-algo-grid">
+          <div class="ecg-algo-stat"><span>检测心拍</span><strong>${fmtNum(analysis.beat_count, 0)} 次</strong></div>
+          <div class="ecg-algo-stat"><span>平均 RR</span><strong>${analysis.median_rr_ms == null ? "—" : `${fmtNum(analysis.median_rr_ms, 0)} ms`}</strong></div>
+          <div class="ecg-algo-stat"><span>节律变异</span><strong>${analysis.cv_rr_pct == null ? "—" : `${fmtNum(analysis.cv_rr_pct, 1)}%`}</strong></div>
+          <div class="ecg-algo-stat"><span>${analysis.premature_count > 0 ? "早搏检出" : "QRS 宽度"}</span><strong>${analysis.premature_count > 0 ? `${fmtNum(analysis.premature_count, 0)} 次` : (analysis.qrs_ms == null ? "—" : `${fmtNum(analysis.qrs_ms, 0)} ms`)}</strong></div>
+        </div>` : ""}
+        <p class="ecg-algo-summary">${escapeHtml(analysis.summary || "")}</p>
+        <p class="ecg-algo-disclaimer">${escapeHtml(analysis.disclaimer || "")}</p>
+      </section>` : ""}
       ${example ? "" : `<section class="card ecg-details-card"><h2 class="card-title">记录详情</h2>
         <div class="kv-row"><span class="kv-k">记录时间</span><span class="kv-v">${escapeHtml(dateLabel || "—")}</span></div>
         <div class="kv-row"><span class="kv-k">时长</span><span class="kv-v">${duration == null ? "—" : `${fmtNum(duration, 0)} 秒`}</span></div>
@@ -5099,15 +5483,41 @@
 
     const scroll = $("ecg-scroll");
     const track = $("ecg-track");
+    const readout = $("ecg-readout");
     let zoom = 1;
     let cursor = null;
+    let programmaticScroll = false;
+    let lastDragAt = -Infinity;
+    let lastTouchTapAt = -Infinity;
+    const totalDuration = samples.length / hz;
     const pixelsPerSecond = () => 25 * (96 / 25.4) * zoom;
     const marker = $("ecg-cursor");
     const tiles = new Map();
     const tileWidth = 512;
     let totalWidth = 0;
+    function updateViewportReadout() {
+      if (!readout) return;
+      const pps = pixelsPerSecond();
+      const startSec = Math.max(0, Math.min(totalDuration, scroll.scrollLeft / pps));
+      const viewW = scroll.clientWidth;
+      if (viewW > 0) {
+        const endSec = Math.max(startSec, Math.min(totalDuration, (scroll.scrollLeft + viewW) / pps));
+        readout.textContent = `${startSec.toFixed(2)} – ${endSec.toFixed(2)} s`;
+      } else {
+        readout.textContent = `${startSec.toFixed(2)} s`;
+      }
+    }
+    function hideCursor() {
+      if (cursor === null && marker.hidden) return;
+      cursor = null;
+      marker.hidden = true;
+      updateViewportReadout();
+    }
     function moveCursor() {
-      if (cursor === null) return;
+      if (cursor === null) {
+        marker.hidden = true;
+        return;
+      }
       marker.hidden = false;
       marker.style.transform = `translateX(${cursor / hz * pixelsPerSecond()}px)`;
     }
@@ -5144,12 +5554,17 @@
       track.style.width = `${totalWidth}px`;
       track.style.height = `${Math.round(50 * 96 / 25.4 * zoom) + 23}px`;
       if (centerSeconds !== null) {
-        scroll.scrollLeft = centerSeconds * pixelsPerSecond() - scroll.clientWidth / 2;
+        const maxLeft = Math.max(0, totalWidth - scroll.clientWidth);
+        const nextLeft = Math.max(0, Math.min(maxLeft, centerSeconds * pixelsPerSecond() - scroll.clientWidth / 2));
+        programmaticScroll = true;
+        scroll.scrollLeft = nextLeft;
+        requestAnimationFrame(() => { programmaticScroll = false; });
       }
       for (const tile of tiles.values()) tile.remove();
       tiles.clear();
       fillTiles();
       moveCursor();
+      if (cursor === null) updateViewportReadout();
     }
     drawTrack();
 
@@ -5162,41 +5577,95 @@
     }
     $("ecg-zoom-in").onclick = () => changeZoom(zoom * 1.25);
     $("ecg-zoom-out").onclick = () => changeZoom(zoom / 1.25);
-    function read(event) {
-      const x = event.clientX - scroll.getBoundingClientRect().left - scroll.clientLeft + scroll.scrollLeft;
+    function read(event, haptic = false) {
+      const rect = scroll.getBoundingClientRect();
+      const x = event.clientX - rect.left - scroll.clientLeft + scroll.scrollLeft;
       const index = Math.min(samples.length - 1, Math.max(0, Math.round(x / pixelsPerSecond() * hz)));
-      $("ecg-readout").textContent = `${(index / hz).toFixed(2)} s · ${samples[index].toFixed(3)} mV`;
-      if (cursor !== index) {
-        cursor = index;
-        moveCursor();
-      }
+      if (readout) readout.textContent = `${(index / hz).toFixed(2)} s · ${samples[index].toFixed(3)} mV`;
+      const changed = cursor !== index || marker.hidden;
+      cursor = index;
+      moveCursor();
+      if (haptic && changed) triggerHapticTick(6);
     }
     let redrawFrame = 0;
     scroll.addEventListener("scroll", () => {
+      if (!programmaticScroll) {
+        lastDragAt = performance.now();
+        hideCursor();
+      }
       if (redrawFrame) return;
       redrawFrame = requestAnimationFrame(() => {
         redrawFrame = 0;
         if (!track.isConnected) return;
         fillTiles();
-        read({ clientX: scroll.getBoundingClientRect().left + scroll.clientWidth / 2 });
+        if (cursor === null) updateViewportReadout();
       });
     }, { passive: true });
-    track.onclick = read;
-    track.onpointermove = (event) => { if (event.pointerType === "mouse" && !event.buttons) read(event); };
+    track.onclick = (event) => {
+      const now = performance.now();
+      if (now - lastTouchTapAt < 450 || now - lastDragAt < 350) return;
+      read(event, true);
+    };
     const pinchDistance = (touches) => Math.hypot(
       touches[0].clientX - touches[1].clientX, touches[0].clientY - touches[1].clientY);
     let pinch = null;
+    let tap = null;
     scroll.addEventListener("touchstart", (event) => {
-      if (event.touches.length === 2) pinch = { distance: pinchDistance(event.touches), zoom };
+      if (event.touches.length === 2) {
+        tap = null;
+        pinch = { distance: pinchDistance(event.touches), zoom };
+        lastDragAt = performance.now();
+        hideCursor();
+        return;
+      }
+      if (event.touches.length === 1) {
+        const pt = event.changedTouches[0] || event.touches[0];
+        if (pt) {
+          tap = { id: pt.identifier, x: pt.clientX, y: pt.clientY, scrollLeft: scroll.scrollLeft, moved: false };
+        }
+      }
     }, { passive: true });
     scroll.addEventListener("touchmove", (event) => {
-      if (!pinch || event.touches.length !== 2 || pinch.distance === 0) return;
-      const zoomTo = pinch.zoom * pinchDistance(event.touches) / pinch.distance;
-      if (Math.abs(zoom - zoomTo) >= .035) changeZoom(zoomTo);
+      if (pinch && event.touches.length === 2 && pinch.distance > 0) {
+        lastDragAt = performance.now();
+        hideCursor();
+        const zoomTo = pinch.zoom * pinchDistance(event.touches) / pinch.distance;
+        if (Math.abs(zoom - zoomTo) >= .035) changeZoom(zoomTo);
+        return;
+      }
+      if (tap) {
+        for (const pt of event.changedTouches) {
+          if (pt.identifier !== tap.id) continue;
+          if (Math.hypot(pt.clientX - tap.x, pt.clientY - tap.y) > 8 || Math.abs(scroll.scrollLeft - tap.scrollLeft) > 2) {
+            tap.moved = true;
+            lastDragAt = performance.now();
+            hideCursor();
+          }
+          break;
+        }
+      }
     }, { passive: true });
-    for (const type of ["touchend", "touchcancel"]) {
-      scroll.addEventListener(type, () => { pinch = null; }, { passive: true });
-    }
+    scroll.addEventListener("touchend", (event) => {
+      if (event.touches.length < 2) pinch = null;
+      if (tap) {
+        for (const pt of event.changedTouches) {
+          if (pt.identifier !== tap.id) continue;
+          const curTap = tap;
+          tap = null;
+          if (!curTap.moved && Math.abs(scroll.scrollLeft - curTap.scrollLeft) <= 2) {
+            lastTouchTapAt = performance.now();
+            read(pt, true);
+          } else if (curTap.moved) {
+            lastDragAt = performance.now();
+          }
+          break;
+        }
+      }
+    }, { passive: true });
+    scroll.addEventListener("touchcancel", () => {
+      pinch = null;
+      tap = null;
+    }, { passive: true });
     const exportButton = $("ecg-export-report");
     if (exportButton) exportButton.onclick = () => openGlassSelectSheet({
       title: "导出心电图报告",
@@ -8878,6 +9347,7 @@
 
   function pan(now) {
     frame = 0;
+    if (window.__isPanelTransitionBusy?.()) return;
     for (const [el, state] of positions) {
       const travel = state.distance / speed;
       const phase = (now - state.start) % (2 * (pause + travel));
@@ -8888,6 +9358,7 @@
   }
 
   function scan() {
+    if (window.__isPanelTransitionBusy?.()) return;
     if (document.hidden || motion.matches || (!positions.size && !document.querySelector(".wo-detail-active, .training-overlay[open]"))) {
       for (const el of positions.keys()) el.scrollLeft = 0;
       positions.clear();
@@ -9101,19 +9572,20 @@
     move(point);
   }
 
-  function clear() {
+  function clear(immediate = false) {
     manualScroll = null;
     pointer = null;
     bounds = null;
     cancelAnimationFrame(frame);
     frame = 0;
-    if (isLit) layer.classList.add("is-releasing");
+    if (immediate) layer.classList.remove("visible", "is-releasing");
+    else if (isLit) layer.classList.add("is-releasing");
     isLit = false;
     layer.classList.remove("visible");
   }
-  window.__clearGlassTouchLight = () => {
+  window.__clearGlassTouchLight = (immediate = false) => {
     stopCoasting();
-    clear();
+    clear(Boolean(immediate));
   };
 
   const options = { passive: true, capture: true };
@@ -9157,7 +9629,7 @@
         canPull, ptrActive: false, pullAnchorY: point.clientY
       };
     }
-    show(target, id, point);
+    if (!window.__isPanelTransitionBusy?.()) show(target, id, point);
   }, options);
   window.addEventListener("touchmove", event => {
     for (const point of event.changedTouches) {
@@ -9203,7 +9675,7 @@
             gesture.previousY = point.clientY;
             gesture.scroller.scrollBy({ top: delta, behavior: "instant" });
           }
-        } else if (gesture.axis === "horizontal" && gesture.horizontalScroller && !gesture.target.closest(".svg-chart-wrap, .apple-svg-chart")) {
+        } else if (gesture.axis === "horizontal" && gesture.horizontalScroller && !gesture.target.closest(".svg-chart-wrap, .apple-svg-chart, .ecg-grid-scroll")) {
           gesture.horizontalScroller.scrollLeft += gesture.previousX - point.clientX;
           gesture.previousX = point.clientX;
         }

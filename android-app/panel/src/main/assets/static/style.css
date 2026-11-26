@@ -5431,14 +5431,33 @@ body::before { background: var(--glass-wash); }
 }
 
 /* Rounded card expand and collapse */
-html.ct-animating,
-html:has(.ct-sheet-layer) {
+html.ct-animating {
   overflow-anchor: none;
 }
 
-html.ct-animating #app-shell :where(*, *::before, *::after) {
+html.ct-animating #app-shell :is(
+  .lg-backdrop,
+  .sidebar,
+  .card,
+  .metric-card,
+  .hero-card,
+  .apple-chart-card,
+  .ah-card,
+  .wo-list-item,
+  .trend-card,
+  .overlay-stage
+),
+html.ct-animating #app-shell .liquid-glass::before,
+html.ct-animating #app-shell .liquid-pill::before {
   -webkit-backdrop-filter: none !important;
   backdrop-filter: none !important;
+}
+
+html.ct-animating .glass-touch-layer,
+html.ct-animating .glass-touch-layer .glass-touch-glow::before {
+  opacity: 0 !important;
+  animation: none !important;
+  transition: none !important;
 }
 
 html.ct-animating :is(#mobile-header, #bottom-dock, .detail-nav-bar, .wo-mobile-back-bar) [data-lg-theme].dashboard-glass-surface.lg-root:not([data-transparency="opaque"]) > .lg-decoration .lg-tint {
@@ -5476,8 +5495,8 @@ html.ct-animating :is(.interactive-card, .metric-card, .ah-card, .trend-card, .w
   background-size: 100% 100% !important;
   background-repeat: no-repeat !important;
   pointer-events: none !important;
-  will-change: transform, opacity;
-  contain: layout style;
+  will-change: transform, opacity, clip-path;
+  contain: layout style paint;
   animation: none !important;
 }
 
@@ -5490,12 +5509,29 @@ html.ct-animating :is(.interactive-card, .metric-card, .ah-card, .trend-card, .w
   top: auto !important;
 }
 
-.ct-sheet-layer :where(*, *::before, *::after) {
+.ct-sheet-layer :is(
+  .ring-fg,
+  .svg-bar-grow,
+  .svg-cap-expand,
+  .svg-sleep-block,
+  .svg-sleep-bridge,
+  .svg-sleep-glow,
+  .svg-line-draw,
+  .stagger-card,
+  .hl-fill,
+  .sleep-amount-fill,
+  .hr-zone-fill,
+  .split-bar-fill,
+  .balance-marker,
+  .glass-touch-layer,
+  .lg-tint,
+  .lg-glow,
+  .scope-thumb,
+  .dock-indicator
+) {
   animation: none !important;
   transition: none !important;
   will-change: auto !important;
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
 }
 
 #workout-detail-card.ct-sheet-layer:not(.hidden) {
@@ -5745,4 +5781,100 @@ html.ct-animating :is(.interactive-card, .metric-card, .ah-card, .trend-card, .w
   padding: 0 4px;
   color: var(--text-2);
   font-size: 12px;
+}
+
+.ecg-algo-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ecg-algo-title-group {
+  min-width: 0;
+}
+
+.ecg-algo-kicker-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+
+.ecg-algo-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--seg-bg);
+  color: var(--text-2);
+}
+
+.ecg-algo-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  background: var(--text-2);
+}
+
+.ecg-algo-dot.tone-good { background: var(--apple-green, #34c759); }
+.ecg-algo-dot.tone-info { background: var(--apple-blue, #007aff); }
+.ecg-algo-dot.tone-warn { background: var(--apple-orange, #ff9500); }
+.ecg-algo-dot.tone-alert { background: var(--apple-red, #ff3b30); }
+.ecg-algo-dot.tone-muted { background: var(--text-2); }
+
+.ecg-algo-title {
+  margin: 0;
+}
+
+.ecg-algo-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+@media (max-width: 540px) {
+  .ecg-algo-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.ecg-algo-stat {
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: var(--seg-bg);
+  min-width: 0;
+}
+
+.ecg-algo-stat span {
+  display: block;
+  font-size: 11px;
+  color: var(--text-2);
+}
+
+.ecg-algo-stat strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ecg-algo-summary {
+  margin: 11px 0 0;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.ecg-algo-disclaimer {
+  margin: 8px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-2);
 }

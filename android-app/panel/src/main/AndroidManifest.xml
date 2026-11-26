@@ -9,8 +9,9 @@
     </queries>
     <application android:allowBackup="false"
         android:enableOnBackInvokedCallback="false"
-        android:icon="@drawable/ic_health"
-        android:label="健康面板 · 离线"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:label="Health Panel"
         android:theme="@android:style/Theme.Material.Light.NoActionBar"
         android:usesCleartextTraffic="false">
         <service android:name=".PanelMcpService"

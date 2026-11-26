@@ -217,6 +217,7 @@ class PanelActivity : ComponentActivity() {
         val bg = if (dark) Color.BLACK else Color.parseColor("#F2F2F7")
         window.decorView.setBackgroundColor(bg)
         rootContainer?.setBackgroundColor(bg)
+        if (::web.isInitialized) web.setBackgroundColor(bg)
     }
 
     private fun pushSafeInsetsToWeb() {
@@ -237,7 +238,7 @@ class PanelActivity : ComponentActivity() {
     @SuppressLint("SetJavaScriptEnabled")
     private fun configurePanel() {
         web = WebView(this).apply {
-            setBackgroundColor(Color.TRANSPARENT)
+            setBackgroundColor(if (isDarkUi) Color.BLACK else Color.parseColor("#F2F2F7"))
             isVerticalScrollBarEnabled = false
             isHorizontalScrollBarEnabled = false
             scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
@@ -620,7 +621,7 @@ class PanelActivity : ComponentActivity() {
     private fun asset(path: String): WebResourceResponse {
         val name = if (path == "/") "index.html" else path.removePrefix("/")
         if (!name.matches(Regex("[A-Za-z0-9._/-]+")) || name.split('/').any { it == "." || it == ".." }
-            || (name !in setOf("index.html", "icon.svg", "manifest.json") && !name.startsWith("static/"))) {
+            || (name !in setOf("index.html", "icon.svg", "icon.png", "manifest.json") && !name.startsWith("static/"))) {
             return response(404, "text/plain", "Not found")
         }
         val mime = when (name.substringAfterLast('.')) {

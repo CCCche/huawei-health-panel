@@ -110,7 +110,7 @@ class PanelMcpService : Service() {
         val stop = PendingIntent.getService(this, 1, Intent(this, PanelMcpService::class.java).setAction(ACTION_STOP), flags)
         val open = PendingIntent.getActivity(this, 2, Intent(this, PanelActivity::class.java), flags)
         return Notification.Builder(this, CHANNEL_ID).setSmallIcon(R.drawable.ic_health)
-            .setContentTitle("健康面板 · 本地 MCP 服务").setContentText(message).setContentIntent(open)
+            .setContentTitle("Health Panel · 本地 MCP 服务").setContentText(message).setContentIntent(open)
             .setOngoing(true).addAction(Notification.Action.Builder(null, "停止服务", stop).build()).build()
     }
 
