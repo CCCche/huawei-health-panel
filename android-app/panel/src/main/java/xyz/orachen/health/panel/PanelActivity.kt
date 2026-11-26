@@ -791,7 +791,7 @@ internal object MapTilePolicy {
         if (!scheme.equals("https", ignoreCase = true)) return false
         if (port != -1 && port != 443) return false
         val normalized = host?.lowercase() ?: return false
-        return autonaviHost.matches(normalized) || normalized == "server.arcgisonline.com"
+        return autonaviHost.matches(normalized)
     }
 }
 

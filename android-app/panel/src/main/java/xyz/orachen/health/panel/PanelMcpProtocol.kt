@@ -56,7 +56,7 @@ internal class PanelMcpProtocol(private val read: (String, JSONObject) -> String
                 val requested = params.optString("protocolVersion")
                 val version = requested.takeIf(::supportsVersion) ?: "2025-11-25"
                 JSONObject().put("protocolVersion", version)
-                    .put("serverInfo", JSONObject().put("name", "huawei-health-panel").put("version", "1.0.2"))
+                    .put("serverInfo", JSONObject().put("name", "huawei-health-panel").put("version", "1.0.3"))
                     .put("capabilities", JSONObject().put("tools", JSONObject()).put("resources", JSONObject()))
             }
             "ping" -> JSONObject()

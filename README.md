@@ -164,7 +164,7 @@ cd android-app
 ## 隐私与安全声明
 
 - 本仓库**不包含**任何个人健康数据库、同步凭据、SQLCipher 密钥、真实个人域名或私人环境脚本（`.gitignore` 默认排除 `config.json`、`.state/`、`.staging/`、`*.db`、`*.sqlite`、`*.apk` 等）。
-- 数据全程在用户本地设备或离线环境解析；地图轨迹视图默认仅对显式放行的公开瓦片域名（高德 `autonavi.com` / Esri `arcgisonline.com`）开放请求。
+- 数据全程在用户本地设备或离线环境解析；地图轨迹视图默认仅对显式放行的公开瓦片域名（高德 `autonavi.com`）开放请求。
 - 使用 Root 自动提权恢复本机数据库密钥时，请仅在个人可控设备上运行并妥善保管导出的明文 SQLite 与 MCP Bearer Token。
 
 ---
@@ -183,12 +183,19 @@ cd android-app
 | **AndroidX Activity / Jetpack Compose Material 3** | Android 导航、边到边适配与原生 UI 容器 | Apache-2.0 |
 | **Model Context Protocol (MCP)** | 本地只读 JSON-RPC 2.0 Tool / Resource 协议适配（`2025-11-25` / `2025-06-18` / `2025-03-26`） | MCP Specification |
 | **SQLCipher 4 & OpenSSL (`libcrypto`)** | `PBKDF2-HMAC-SHA512` / `AES-256-CBC` / `HMAC-SHA512` 离线页级校验与解密规范 | BSD-style / Apache-2.0 |
-| **AutoNavi（高德地图） & Esri ArcGIS** | 运动轨迹公开 HTTPS 地图瓦片服务（经域白名单严格限制） | 第三方公开瓦片服务条款 |
+| **AutoNavi（高德地图）** | 运动轨迹公开 HTTPS 地图瓦片服务（经域白名单严格限制） | 第三方公开瓦片服务条款 |
 | **Huawei HMS Health Kit / Apple Health / ColorOS** | 部分数据点常量规范参考（如体温点 `2104` / ECG 字段），以及健康卡片排版与物理容器变换（Container Transform）动效设计灵感 | 文档 / 视觉与交互设计参考 |
 
 ---
 
 ## 更新日志
+
+### `v1.0.3`（`versionCode = 25`）
+- **骑行速度曲线与非跑步有氧效率优化**：骑行详情页的曲线、概览（平均速度 / 最佳速度）、分段与列表统一改为速度（`km/h`，支持高速骑行轨迹）；骑行与游泳的有氧效率卡片去掉“跑姿”文案并隐藏非相关跑姿漂移项。
+- **游泳百米配速（`/百米`）**：泳池游泳与开放水域游泳的概览、配速曲线（含横屏叠加图）、分段、列表与有氧效率分析统一改为 `/百米`，放宽开放水域游泳 GPS 慢速游配速过滤并适配 50 m / 100 m 分段。
+- **准备度趋势图长按垂直选线**：在「准备度与洞察」的近 14 天准备度趋势图中支持长按/拖动垂直选择线与原生触感反馈，实时查看往日准备度分数与状态分级。
+- **二级与三级页面空闲预加载 & 静默自动同步**：引入串行空闲队列、请求去重与隐藏 DOM 预热，预加载核心二级指标、准备度洞察、训练列表/详情与心电图波形，显著缓解首次点击卡片时的卡顿掉帧；自动同步成功完成不再弹出底部悬浮提示。
+- **界面与地图底图精简**：移除「更多」页已关联设备卡片及首页冗余“更新至…”副标题；全面移除 ArcGIS 地图瓦片配置及 WebView 域白名单（仅保留高德矢量 / 暗黑 / 卫星底图）。
 
 ### `v1.0.2`（`versionCode = 24`）
 - **应用品牌与图标焕新**：桌面应用名称统一改为 **`Health Panel`**，启用全新渐变圆角矩形自适应图标（`@mipmap/ic_launcher` / `@mipmap/ic_launcher_round`）及对应内嵌应用图标 `icon.png`。

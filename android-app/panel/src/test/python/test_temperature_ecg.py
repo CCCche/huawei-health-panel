@@ -1,3 +1,4 @@
+import gzip
 import json
 import math
 import sqlite3
@@ -184,6 +185,134 @@ class TemperatureEcgTest(unittest.TestCase):
 
     def get_cls(self, samples, hz=500):
         return classify_waveform(samples, hz)
+
+    def test_cycling_speed_curve_above_30kmh_and_non_running_biomechanics(self):
+        start_ms = int(self.start.timestamp() * 1000)
+        end_ms = start_ms + 590_000
+        track_pts = [
+            [start_ms + i * 10_000, 31.2304 + i * 0.00089932, 121.4737, 12.0, 142 + (i % 4), 85]
+            for i in range(60)
+        ]
+        dyn = {
+            "cadence_series": [[i * 30, 85] for i in range(10)],
+            "posture_series": [[i * 30, 240, 50.0, 8.2] for i in range(10)],
+        }
+        swim_start_ms = end_ms + 600_000
+        swim_end_ms = swim_start_ms + 600_000
+        swim_splits = [
+            {"sn": str(i + 1), "st": 60, "sd": 5000, "sp": 1200, "shr": 136 + i}
+            for i in range(10)
+        ]
+        swim_hrs = [
+            {"metric": "heart_rate", "ts_ms": swim_start_ms + i * 30_000, "date": "2026-11-24",
+             "ts_iso": (self.start + timedelta(seconds=600 + i * 30)).isoformat(),
+             "value": 135 + (i % 5), "unit": "bpm"}
+            for i in range(20)
+        ]
+        ow_start_ms = swim_end_ms + 600_000
+        ow_end_ms = ow_start_ms + 800_000
+        ow_pts = [
+            [ow_start_ms + i * 25_000, 31.2304 + i * 0.0001192, 121.4737, 0.0, 145 + (i % 5), 24]
+            for i in range(33)
+        ]
+        fixture = self.directory / "cycling_swim.sqlite"
+        with closing(open_health_db(fixture)) as conn:
+            upsert_batch(conn, {
+                "daily_summary": [
+                    {"date": "2026-11-24", "sleep_total_min": 420},
+                ],
+                "workouts": [
+                    {
+                        "start_ms": start_ms,
+                        "end_ms": end_ms,
+                        "date": "2026-11-24",
+                        "start_iso": self.start.isoformat(),
+                        "end_iso": (self.start + timedelta(seconds=590)).isoformat(),
+                        "duration_s": 590.0,
+                        "sport_type_id": 259,
+                        "sport_name": "户外骑行",
+                        "distance_m": 5900.0,
+                        "hr_avg": 143.0,
+                        "pace_avg_s_per_km": 100.0,
+                        "pace_best_s_per_km": 90.0,
+                        "has_gps": 1,
+                        "gps_point_count": len(track_pts),
+                        "running_dynamics_json": json.dumps(dyn),
+                        "track_points_gz": gzip.compress(json.dumps(track_pts).encode("utf-8")),
+                    },
+                    {
+                        "start_ms": swim_start_ms,
+                        "end_ms": swim_end_ms,
+                        "date": "2026-11-24",
+                        "start_iso": (self.start + timedelta(seconds=600)).isoformat(),
+                        "end_iso": (self.start + timedelta(seconds=1200)).isoformat(),
+                        "duration_s": 600.0,
+                        "sport_type_id": 262,
+                        "sport_name": "泳池游泳",
+                        "distance_m": 500.0,
+                        "hr_avg": 137.0,
+                        "pace_avg_s_per_km": 1200.0,
+                        "has_gps": 0,
+                        "gps_point_count": 0,
+                        "splits_json": json.dumps(swim_splits),
+                        "running_dynamics_json": json.dumps(dyn),
+                    },
+                    {
+                        "start_ms": ow_start_ms,
+                        "end_ms": ow_end_ms,
+                        "date": "2026-11-24",
+                        "start_iso": (self.start + timedelta(seconds=1800)).isoformat(),
+                        "end_iso": (self.start + timedelta(seconds=2600)).isoformat(),
+                        "duration_s": 825.0,
+                        "sport_type_id": 266,
+                        "sport_name": "开放水域游泳",
+                        "distance_m": 437.0,
+                        "hr_avg": 147.0,
+                        "pace_avg_s_per_km": 1887.8718,
+                        "has_gps": 1,
+                        "gps_point_count": len(ow_pts),
+                        "track_points_gz": gzip.compress(json.dumps(ow_pts).encode("utf-8")),
+                    },
+                ],
+                "vitals_points": swim_hrs,
+            })
+        import_snapshot(fixture, self.panel, 0)
+
+        cycling = self.get("workout", f"id={start_ms}&max_points=100")
+        speeds = [pt["speed_kmh"] for pt in cycling["gps_track"] if pt.get("speed_kmh") is not None]
+        self.assertTrue(len(speeds) > 40)
+        self.assertTrue(any(s > 34.0 for s in speeds))
+        bio_c = cycling["biomechanics"]
+        self.assertIn("km/h", bio_c["first_half_pace"])
+        self.assertIn("km/h", bio_c["second_half_pace"])
+        self.assertIn("km/h", bio_c["verdict"])
+        labels_c = {row["label"] for row in bio_c["drift_rows"]}
+        self.assertEqual(labels_c, {"心率漂移"})
+
+        swim = self.get("workout", f"id={swim_start_ms}&max_points=100")
+        bio_s = swim["biomechanics"]
+        self.assertEqual(bio_s["first_half_pace"], "2'00\"/百米")
+        self.assertEqual(bio_s["second_half_pace"], "2'00\"/百米")
+        self.assertIn("/百米", bio_s["verdict"])
+        self.assertNotIn("/km", bio_s["verdict"])
+        labels_s = {row["label"] for row in bio_s["drift_rows"]}
+        self.assertEqual(labels_s, {"心率漂移"})
+
+        ow_swim = self.get("workout", f"id={ow_start_ms}&max_points=100")
+        ow_paces_100 = [pt["pace_s_per_100m"] for pt in ow_swim["gps_track"] if pt.get("pace_s_per_100m") is not None]
+        ow_paces_km = [pt["pace_s_per_km"] for pt in ow_swim["gps_track"] if pt.get("pace_s_per_km") is not None]
+        self.assertGreater(len(ow_paces_100), 10)
+        self.assertEqual(len(ow_paces_100), len(ow_paces_km))
+        self.assertTrue(all(160.0 <= p <= 220.0 for p in ow_paces_100))
+        bio_ow = ow_swim["biomechanics"]
+        self.assertTrue(bio_ow["first_half_pace"].endswith("/百米"))
+        self.assertTrue(bio_ow["second_half_pace"].endswith("/百米"))
+        self.assertIn("/百米", bio_ow["verdict"])
+
+        overview = self.get("overview", "days=7")
+        rec_wos = overview.get("recent_workouts") or []
+        self.assertTrue(len(rec_wos) >= 3)
+        self.assertTrue(all("sport_type_id" in w for w in rec_wos))
 
 
 if __name__ == "__main__":

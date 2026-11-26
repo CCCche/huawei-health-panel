@@ -10,10 +10,25 @@
   let browseRenderedRef = null;
   let allHealthRenderedRef = null;
   let proInsightsRenderedRef = null;
+  let proInsightsRenderedTab = "";
   let workoutsRenderedKey = "";
   let dayRenderedDate = "";
   const metricQueryCache = new Map();
   const workoutQueryCache = new Map();
+  const workoutsListCache = new Map();
+  const daySnapshotCache = new Map();
+  const metricInflight = new Map();
+  const workoutInflight = new Map();
+  const workoutsListInflight = new Map();
+  const daySnapshotInflight = new Map();
+  let proInsightsInflight = null;
+  let preloadEpoch = 0;
+  let preloadQueue = [];
+  const preloadScheduledKeys = new Set();
+  let preloadRunning = false;
+  let preloadResumeTimer = null;
+  let preloadWakeFn = null;
+  let lastUserInputAt = 0;
   function cacheMapSet(map, key, val, maxSize = 24) {
     if (map.has(key)) map.delete(key);
     map.set(key, val);
@@ -21,16 +36,287 @@
       map.delete(map.keys().next().value);
     }
   }
-  function invalidateViewRenderCaches() {
+  function invalidateViewRenderCaches({ clearData = true } = {}) {
     summaryRenderedRef = null;
     browseRenderedRef = null;
     allHealthRenderedRef = null;
     proInsightsRenderedRef = null;
+    proInsightsRenderedTab = "";
     workoutsRenderedKey = "";
     dayRenderedDate = "";
-    metricQueryCache.clear();
-    workoutQueryCache.clear();
+    if (clearData) {
+      metricQueryCache.clear();
+      workoutQueryCache.clear();
+      workoutsListCache.clear();
+      daySnapshotCache.clear();
+      metricInflight.clear();
+      workoutInflight.clear();
+      workoutsListInflight.clear();
+      daySnapshotInflight.clear();
+      proInsightsInflight = null;
+      preloadEpoch += 1;
+      preloadQueue = [];
+      preloadScheduledKeys.clear();
+      clearTimeout(preloadResumeTimer);
+      preloadResumeTimer = null;
+      if (preloadWakeFn) {
+        const wake = preloadWakeFn;
+        preloadWakeFn = null;
+        wake();
+      }
+    }
   }
+  const markPreloadUserInput = () => {
+    lastUserInputAt = performance.now();
+  };
+  window.addEventListener("pointerdown", markPreloadUserInput, { passive: true });
+  window.addEventListener("scroll", markPreloadUserInput, { passive: true });
+
+  function isPreloadPaused() {
+    return Boolean(
+      activeCt ||
+      prewarmingCt ||
+      restoringNavigation ||
+      localSyncState.busy ||
+      document.hidden ||
+      (performance.now() - lastUserInputAt < 320)
+    );
+  }
+
+  function resumeSecondaryPreload() {
+    if (preloadResumeTimer) {
+      clearTimeout(preloadResumeTimer);
+      preloadResumeTimer = null;
+    }
+    if (preloadWakeFn && !isPreloadPaused()) {
+      const wake = preloadWakeFn;
+      preloadWakeFn = null;
+      wake();
+    } else if (!preloadRunning && preloadQueue.length && !isPreloadPaused()) {
+      drainPreloadQueue();
+    }
+  }
+
+  function waitForPreloadSlot(epoch) {
+    return new Promise((resolve) => {
+      const finish = (ok) => {
+        preloadWakeFn = null;
+        if (preloadResumeTimer) {
+          clearTimeout(preloadResumeTimer);
+          preloadResumeTimer = null;
+        }
+        resolve(ok);
+      };
+      const probe = () => {
+        if (epoch !== preloadEpoch) {
+          finish(false);
+          return;
+        }
+        if (isPreloadPaused()) {
+          preloadWakeFn = probe;
+          preloadResumeTimer = setTimeout(probe, 320);
+          return;
+        }
+        if (typeof window.requestIdleCallback === "function") {
+          window.requestIdleCallback(() => {
+            if (epoch !== preloadEpoch) finish(false);
+            else if (isPreloadPaused()) probe();
+            else finish(true);
+          }, { timeout: 450 });
+        } else {
+          preloadResumeTimer = setTimeout(() => {
+            if (epoch !== preloadEpoch) finish(false);
+            else if (isPreloadPaused()) probe();
+            else finish(true);
+          }, 60);
+        }
+      };
+      probe();
+    });
+  }
+
+  function enqueuePreloadTask(key, fn, { high = false } = {}) {
+    if (!key || typeof fn !== "function" || preloadScheduledKeys.has(key)) return;
+    preloadScheduledKeys.add(key);
+    const task = { key, fn };
+    if (high) preloadQueue.unshift(task);
+    else preloadQueue.push(task);
+    if (!preloadRunning) drainPreloadQueue();
+  }
+
+  async function drainPreloadQueue() {
+    if (preloadRunning) return;
+    preloadRunning = true;
+    try {
+      while (preloadQueue.length) {
+        const epoch = preloadEpoch;
+        const ok = await waitForPreloadSlot(epoch);
+        if (!ok || epoch !== preloadEpoch) continue;
+        const task = preloadQueue.shift();
+        if (!task) continue;
+        try {
+          await task.fn(epoch);
+        } catch (_) {}
+        if (epoch !== preloadEpoch) continue;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    } finally {
+      preloadRunning = false;
+      if (preloadQueue.length && !isPreloadPaused()) {
+        drainPreloadQueue();
+      }
+    }
+  }
+
+  function queueMetricPreload(metric, scope, { endDate = "", ecgId = "", high = false } = {}) {
+    const norm = normalizeTemperatureMetric(metric);
+    const effScope = scope || defaultMetricScope(norm);
+    const state = { metric: norm, scope: effScope, endDate: endDate || "", ecgId: ecgId || "" };
+    const key = metricQueryKey(state);
+    if (metricQueryCache.has(key)) return;
+    enqueuePreloadTask(`m:${key}`, async (epoch) => {
+      if (epoch !== preloadEpoch || metricQueryCache.has(key)) return;
+      const d = await fetchMetricData(state);
+      if (epoch === preloadEpoch && norm === "ecg" && d?.records?.length) {
+        queueEcgRecordPreloads(d.records, 4, false);
+      }
+    }, { high });
+  }
+
+  function queueWorkoutPreload(wid, { high = false } = {}) {
+    const idStr = wid != null ? String(wid) : "";
+    if (!idStr || workoutQueryCache.has(idStr)) return;
+    enqueuePreloadTask(`w:${idStr}`, async (epoch) => {
+      if (epoch !== preloadEpoch || workoutQueryCache.has(idStr)) return;
+      await fetchWorkoutData(wid);
+    }, { high });
+  }
+
+  function queueEcgRecordPreloads(records, limit = 4, high = false) {
+    (records || []).slice(0, limit).forEach((rec) => {
+      if (rec?.start_ms != null) {
+        queueMetricPreload("ecg_record", "W", { endDate: "", ecgId: String(rec.start_ms), high });
+      }
+    });
+  }
+
+  function queueDayStripPreloads(dateStr) {
+    const metrics = ["steps", "heart_rate", "hrv", "spo2", "stress"];
+    const targetDate = dateStr || "";
+    metrics.forEach((m) => queueMetricPreload(m, "D", { endDate: targetDate }));
+  }
+
+  function scheduleHiddenDomPrewarm() {
+    enqueuePreloadTask("dom:all-health", async (epoch) => {
+      if (epoch !== preloadEpoch || allHealthOpen) return;
+      if (overviewCache && !overviewCache.empty && allHealthRenderedRef !== overviewCache) {
+        renderAllHealthView(overviewCache);
+      }
+    }, { high: true });
+    enqueuePreloadTask("dom:pro-insights", async (epoch) => {
+      if (epoch !== preloadEpoch || proInsightsOpen) return;
+      if (proInsightsCache && !proInsightsCache.empty && proInsightsRenderedRef !== proInsightsCache) {
+        proInsightsTab = "load";
+        renderProInsightsView(proInsightsCache);
+      }
+    }, { high: true });
+  }
+
+  function scheduleSecondaryPreload(data) {
+    if (!data || data.empty) return;
+    preloadQueue = [];
+    preloadScheduledKeys.clear();
+    const refDate = data.latest_day?.date || data.window?.end_date || "";
+    const slpDate = data.latest_night_sleep?.date || refDate;
+
+    // Stage 1: Primary Level-2 Summary Cards & Hidden DOM Pre-render
+    enqueuePreloadTask("dom:all-health", async (epoch) => {
+      if (epoch !== preloadEpoch || allHealthOpen) return;
+      if (overviewCache && !overviewCache.empty && allHealthRenderedRef !== overviewCache) {
+        renderAllHealthView(overviewCache);
+      }
+    });
+    queueMetricPreload("activity", "D", { endDate: "" });
+    if (refDate) queueMetricPreload("activity", "D", { endDate: refDate });
+    queueMetricPreload("sleep", "D", { endDate: "" });
+    if (slpDate) queueMetricPreload("sleep", "D", { endDate: slpDate });
+
+    enqueuePreloadTask("pro:insights", async (epoch) => {
+      if (epoch !== preloadEpoch) return;
+      const d = await fetchProInsightsData();
+      if (epoch !== preloadEpoch || !d || d.empty) return;
+      if (!proInsightsOpen && proInsightsRenderedRef !== d) {
+        proInsightsTab = "load";
+        renderProInsightsView(d);
+      }
+      (d.aerobic_lab?.ef_series || []).slice(-3).reverse().forEach((r) => queueWorkoutPreload(r.workout_id));
+    });
+
+    ["heart_rate", "hrv", "spo2", "temperature"].forEach((m) => queueMetricPreload(m, "W", { endDate: "" }));
+    document.querySelectorAll("#summary-cards-grid .metric-card").forEach((el) => {
+      if (el.dataset.metric) {
+        queueMetricPreload(el.dataset.metric, el.dataset.scope || defaultMetricScope(el.dataset.metric), { endDate: "" });
+      }
+    });
+    (data.recent_workouts || []).slice(0, 3).forEach((w) => queueWorkoutPreload(w.workout_id));
+
+    // Stage 2: Remaining Level-2 Cards & Tab Preloads
+    queueMetricPreload("vo2max", "6M", { endDate: "" });
+    queueMetricPreload("training_index", "M", { endDate: "" });
+    queueMetricPreload("running_index", "6M", { endDate: "" });
+    document.querySelectorAll("#summary-highlights-stack .hl-insight-card").forEach((el) => {
+      if (el.dataset.metric) {
+        queueMetricPreload(el.dataset.metric, el.dataset.scope || defaultMetricScope(el.dataset.metric), { endDate: "" });
+      }
+    });
+    document.querySelectorAll("#summary-trends-grid .trend-card").forEach((el) => {
+      if (el.dataset.metric) queueMetricPreload(el.dataset.metric, "M", { endDate: "" });
+    });
+    queueMetricPreload("ecg", "W", { endDate: "" });
+
+    enqueuePreloadTask("tab:workouts", async (epoch) => {
+      if (epoch !== preloadEpoch) return;
+      const wData = await fetchWorkoutsData("");
+      if (epoch !== preloadEpoch) return;
+      if (currentTab !== "workouts" && !currentSportFilter && workoutsRenderedKey !== "|1") {
+        await loadWorkouts("", { skipDetail: true });
+      }
+      (wData?.workouts || []).slice(0, 6).forEach((w) => queueWorkoutPreload(w.workout_id));
+    });
+
+    enqueuePreloadTask("tab:day", async (epoch) => {
+      if (epoch !== preloadEpoch) return;
+      const dData = await fetchDaySnapshotData("");
+      if (epoch !== preloadEpoch) return;
+      if (currentTab !== "browse" && !dayRenderedDate) {
+        await loadDaySnapshot("");
+      }
+      queueDayStripPreloads(dData?.date || "");
+    });
+
+    [
+      ["steps", "W"],
+      ["active_energy", "D"],
+      ["basal_energy", "W"],
+      ["distance", "D"],
+      ["resting_hr", "W"],
+      ["stress", "W"],
+      ["temperature", "W"],
+    ].forEach(([m, s]) => queueMetricPreload(m, s, { endDate: "" }));
+
+    // Stage 3: Key Secondary Scopes
+    [
+      ["sleep", "W"],
+      ["activity", "W"],
+      ["heart_rate", "D"],
+      ["steps", "D"],
+    ].forEach(([m, s]) => queueMetricPreload(m, s, { endDate: "" }));
+  }
+
+  window.addEventListener("ct-transition-end", resumeSecondaryPreload);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden) resumeSecondaryPreload();
+  });
   let selectedDay = null;
   let currentSportFilter = "";
   let workoutsCache = null;
@@ -56,7 +342,7 @@
   const TAB_INDEX = { summary: 0, workouts: 1, browse: 2, more: 3 };
   const TAB_ORDER = ["summary", "workouts", "browse", "more"];
   const TAB_TITLES = { summary: "摘要", workouts: "体能训练", browse: "浏览", more: "更多" };
-  const MAP_ORDER = ["gaode_vec", "gaode_dark", "gaode_sat", "arcgis"];
+  const MAP_ORDER = ["gaode_vec", "gaode_dark", "gaode_sat"];
   const MAP_PROVIDERS = {
     gaode_vec: {
       label: "高德矢量",
@@ -78,13 +364,6 @@
       subdomains: "1234",
       darkFilter: false,
       attr: "&copy; 高德卫星 AutoNavi",
-    },
-    arcgis: {
-      label: "ArcGIS 街景",
-      url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}",
-      subdomains: "",
-      darkFilter: false,
-      attr: "&copy; Esri ArcGIS",
     },
   };
   const SCOPE_LABELS = [
@@ -215,7 +494,7 @@
       b.classList.toggle("active", b.dataset.themeVal === theme);
     });
 
-    invalidateViewRenderCaches();
+    invalidateViewRenderCaches({ clearData: false });
     if (detailState && detailDataCache) {
       renderMetricDetailScreen(detailDataCache, "resize");
     }
@@ -231,6 +510,7 @@
       applyMapTiles();
       renderWorkoutDetailCards(workoutDetailCache, true);
     }
+    scheduleHiddenDomPrewarm();
   }
 
   function toggleTheme() {
@@ -999,14 +1279,19 @@
       ptrController?.onSyncFinished(localSyncState);
     }
     if (!localSyncState.busy && localSyncState.message) {
+      const suppressAutoToast = !localSyncState.error && (
+        localSyncState.sync_trigger === "auto" ||
+        String(localSyncState.message || "").startsWith("已自动同步")
+      );
       const suppressPtrToast = ptrActiveForSync && !localSyncState.error && localSyncState.sync_result === "unchanged";
       const toastKey = `${eventSeq}|${rev}|${Boolean(localSyncState.error)}|${localSyncState.message}`;
       if (toastKey !== lastLocalToastKey) {
         lastLocalToastKey = toastKey;
-        if (!suppressPtrToast) showToast(localSyncState.message);
+        if (!suppressPtrToast && !suppressAutoToast) showToast(localSyncState.message);
       }
     }
     renderLocalSyncUI();
+    if (!localSyncState.busy) resumeSecondaryPreload();
   };
 
   async function startOfflinePanel() {
@@ -2107,11 +2392,12 @@
       const needReloadWorkouts =
         !workoutsCache ||
         Boolean(opts.openDetailId) ||
-        !restoringNavigation ||
         workoutsRenderedKey !== `${currentSportFilter || ""}|1`;
       if (needReloadWorkouts) {
         await loadWorkouts(currentSportFilter, opts);
         tabDidRender = true;
+      } else if (!isMobileViewport() && !workoutDetailCache && selectedWorkoutId) {
+        await loadWorkoutDetail(selectedWorkoutId, false);
       }
     } else if (tab === "browse") {
       if (!overviewCache) {
@@ -2121,8 +2407,9 @@
         renderBrowseCategories(overviewCache);
         tabDidRender = true;
       }
-      if (!restoringNavigation || !dayCache || dayRenderedDate !== (opts.date || selectedDay)) {
-        await loadDaySnapshot(opts.date || selectedDay);
+      const wantDay = opts.date || selectedDay;
+      if (!dayCache || !dayRenderedDate || (wantDay && dayRenderedDate !== wantDay)) {
+        await loadDaySnapshot(wantDay);
         tabDidRender = true;
       }
     } else if (tab === "more") {
@@ -2279,6 +2566,7 @@
       restoringNavigation &&
       proInsightsCache &&
       proInsightsRenderedRef === proInsightsCache &&
+      proInsightsRenderedTab === proInsightsTab &&
       piBody?.getAttribute("data-mounted-pro") === "1"
     );
     if (!reuseMountedPro && piBody && !proInsightsCache) piBody.removeAttribute("data-mounted-pro");
@@ -2286,12 +2574,34 @@
     else if (piView) piView.classList.remove("no-anim-replay");
 
     if (originMeta && piView) {
+      let prewarmedPro = proInsightsCache && !proInsightsCache.empty ? proInsightsCache : null;
+      let proFetchPromise = null;
+      if (!prewarmedPro) {
+        prewarmingCt = true;
+        syncNativeBackState();
+        try {
+          proFetchPromise = fetchProInsightsData();
+          const waited = await Promise.race([
+            proFetchPromise.catch(() => null),
+            new Promise((resolve) => setTimeout(() => resolve(null), CT_PREWARM_MS)),
+          ]);
+          if (waited && !waited.empty) prewarmedPro = waited;
+        } finally {
+          prewarmingCt = false;
+          syncNativeBackState();
+        }
+      }
       const afterOpening = runContainerOpenTransition({
         targetEl: piView,
         originMeta,
         prepare: () => {
-          if (proInsightsCache && !proInsightsCache.empty) {
-            renderProInsightsView(proInsightsCache);
+          if (prewarmedPro && !prewarmedPro.empty) {
+            const canReuseHidden = Boolean(
+              proInsightsRenderedRef === prewarmedPro &&
+              proInsightsRenderedTab === proInsightsTab &&
+              piBody?.getAttribute("data-mounted-pro") === "1"
+            );
+            if (!canReuseHidden) renderProInsightsView(prewarmedPro);
             sealOneShotAnimations(piView);
           } else if (piBody) {
             piBody.innerHTML = '<div class="card"><div class="card-note">正在计算深度生理与训练分析...</div></div>';
@@ -2307,8 +2617,8 @@
           window.scrollTo({ top: 0, behavior: "instant" });
         },
       });
-      if (!proInsightsCache || proInsightsCache.empty) {
-        await fetchAndRenderProInsights({ afterOpening });
+      if (!prewarmedPro || prewarmedPro.empty) {
+        await fetchAndRenderProInsights({ afterOpening, fetchPromise: proFetchPromise });
       }
       return;
     }
@@ -2328,6 +2638,22 @@
     if (!reuseMountedPro) await fetchAndRenderProInsights();
   }
 
+  async function fetchProInsightsData() {
+    if (proInsightsCache && !proInsightsCache.empty) return proInsightsCache;
+    if (proInsightsInflight) return proInsightsInflight;
+    const epoch = preloadEpoch;
+    const p = apiJson("/api/v1/dashboard/insights")
+      .then((data) => {
+        if (epoch === preloadEpoch) proInsightsCache = data;
+        return data;
+      })
+      .finally(() => {
+        if (proInsightsInflight === p) proInsightsInflight = null;
+      });
+    proInsightsInflight = p;
+    return p;
+  }
+
   async function fetchAndRenderProInsights(opts = {}) {
     const piBody = $("pro-insights-body");
     if (!proInsightsCache && piBody && !opts.afterOpening) {
@@ -2335,11 +2661,15 @@
     }
     const route = navigationRoute;
     try {
-      const data = await apiJson("/api/v1/dashboard/insights");
+      const data = await (opts.fetchPromise || fetchProInsightsData());
       if (opts.afterOpening && !(await opts.afterOpening)) return;
-      proInsightsCache = data;
       if (proInsightsOpen && route === navigationRoute) {
-        renderProInsightsView(data);
+        const canReuse = Boolean(
+          proInsightsRenderedRef === data &&
+          proInsightsRenderedTab === proInsightsTab &&
+          piBody?.getAttribute("data-mounted-pro") === "1"
+        );
+        if (!canReuse) renderProInsightsView(data);
         if (opts.afterOpening) sealOneShotAnimations($("pro-insights-view"));
       }
     } catch (err) {
@@ -2392,6 +2722,16 @@
     return metric === "body_temperature" || metric === "skin_temperature" ? "temperature" : metric;
   }
 
+  function defaultMetricScope(metric) {
+    return metric === "activity" || metric === "sleep" || metric === "active_energy" || metric === "distance"
+      ? "D"
+      : metric === "vo2max" || metric === "running_index"
+        ? "6M"
+        : metric === "training_index"
+          ? "M"
+          : "W";
+  }
+
   async function openMetricDetail(metric, opts = {}, originEl = null) {
     metric = normalizeTemperatureMetric(metric);
     if (!restoringNavigation) cancelActiveTransition();
@@ -2428,15 +2768,7 @@
       return;
     }
 
-    const defaultScope =
-      metric === "activity" || metric === "sleep" || metric === "active_energy" || metric === "distance"
-        ? "D"
-        : metric === "vo2max" || metric === "running_index"
-          ? "6M"
-          : metric === "training_index"
-            ? "M"
-            : "W";
-    const initScope = opts.scope || defaultScope;
+    const initScope = opts.scope || defaultMetricScope(metric);
     const initSleepMode = opts.sleepMode || "stages";
     detailState = {
       metric,
@@ -2543,25 +2875,37 @@
   async function fetchMetricData(state) {
     const key = metricQueryKey(state);
     if (metricQueryCache.has(key)) return metricQueryCache.get(key);
-    let data;
-    if (state.metric === "ecg" || state.metric === "ecg_record") {
-      const query = state.ecgId ? `?id=${encodeURIComponent(state.ecgId)}` : "";
-      data = await apiJson(`/api/v1/dashboard/ecg${query}`);
-      data.metric = state.metric;
-      data.title = METRIC_META[state.metric].title;
-    } else {
-      const qs = new URLSearchParams({
-        type: state.metric,
-        scope: state.scope,
-      });
-      if (state.endDate) qs.set("end", state.endDate);
-      data = await apiJson(`/api/v1/dashboard/metric?${qs.toString()}`);
-    }
-    cacheMapSet(metricQueryCache, key, data, 24);
-    if (data?.anchor_date && !state.endDate) {
-      cacheMapSet(metricQueryCache, `${state.metric}|${state.scope}|${data.anchor_date}|${state.ecgId || ""}`, data, 24);
-    }
-    return data;
+    if (metricInflight.has(key)) return metricInflight.get(key);
+    const epoch = preloadEpoch;
+    const req = (async () => {
+      let data;
+      if (state.metric === "ecg" || state.metric === "ecg_record") {
+        const query = state.ecgId ? `?id=${encodeURIComponent(state.ecgId)}` : "";
+        data = await apiJson(`/api/v1/dashboard/ecg${query}`);
+        data.metric = state.metric;
+        data.title = METRIC_META[state.metric].title;
+      } else {
+        const qs = new URLSearchParams({
+          type: state.metric,
+          scope: state.scope,
+        });
+        if (state.endDate) qs.set("end", state.endDate);
+        data = await apiJson(`/api/v1/dashboard/metric?${qs.toString()}`);
+      }
+      if (epoch === preloadEpoch) {
+        cacheMapSet(metricQueryCache, key, data, 120);
+        if (data?.anchor_date && !state.endDate) {
+          cacheMapSet(metricQueryCache, `${state.metric}|${state.scope}|${data.anchor_date}|${state.ecgId || ""}`, data, 120);
+        } else if (state.endDate && !data?.next_end) {
+          cacheMapSet(metricQueryCache, `${state.metric}|${state.scope}||${state.ecgId || ""}`, data, 120);
+        }
+      }
+      return data;
+    })().finally(() => {
+      if (metricInflight.get(key) === req) metricInflight.delete(key);
+    });
+    metricInflight.set(key, req);
+    return req;
   }
 
   async function fetchAndRenderMetricDetail(opts = {}) {
@@ -2932,6 +3276,7 @@
     renderBrowseCategories(data);
     renderMoreTab();
     renderLocalSyncUI();
+    scheduleSecondaryPreload(data);
     return true;
   }
 
@@ -3281,7 +3626,7 @@
     gridEl.innerHTML = cards
       .map(
         (c, idx) => `
-      <div class="metric-card stagger-card" style="--card-idx:${idx}" data-idx="${idx}" data-metric="${escapeHtml(c.metric)}" role="button" tabindex="0">
+      <div class="metric-card stagger-card" style="--card-idx:${idx}" data-idx="${idx}" data-metric="${escapeHtml(c.metric)}" data-scope="${escapeHtml(c.scope || "")}" role="button" tabindex="0">
         <div class="metric-card-head">
           <span class="metric-title" style="color:${c.color}">
             <span class="metric-icon-inline">${appleCategoryIconSvg(c.metric)}</span>
@@ -3888,6 +4233,7 @@
 
   function renderProTabContent(container, data, p, animate) {
     if (!container) return;
+    proInsightsRenderedTab = proInsightsTab;
     if (proInsightsTab === "sleep") {
       renderProSleepTab(container, data, p);
     } else if (proInsightsTab === "aerobic") {
@@ -3895,11 +4241,22 @@
     } else {
       renderProLoadTab(container, data, p);
     }
+    if (proInsightsOpen) {
+      (data?.aerobic_lab?.ef_series || []).slice(-4).reverse().forEach((r) => queueWorkoutPreload(r.workout_id));
+    }
     if (animate) triggerChartMotion(container, "chart-crossfade");
   }
 
-  function drawReadinessTrendSvg(pts, accentHex, p) {
-    if (!pts || pts.length < 2) return '<div class="card-note">最近 14 天样本积累中</div>';
+  function getReadinessTier(score) {
+    const v = Number(score);
+    if (!Number.isFinite(v)) return { status: "", color: "#32ADE6" };
+    if (v >= 82) return { status: "状态巅峰", color: "#30D158" };
+    if (v >= 68) return { status: "恢复良好", color: "#32ADE6" };
+    if (v >= 52) return { status: "适度调整", color: "#FF9F0A" };
+    return { status: "建议休养", color: "#FF3B30" };
+  }
+
+  function buildReadinessTrendLayout(pts) {
     const W = 320;
     const H = 132;
     const pL = 6;
@@ -3908,7 +4265,13 @@
     const pB = 108;
     const mapX = (i) => pL + (i / Math.max(pts.length - 1, 1)) * (pR - pL);
     const mapY = (v) => pB - ((Math.max(20, Math.min(100, Number(v))) - 20) / 80) * (pB - pT);
-    const coords = pts.map((pt, i) => ({ x: mapX(i), y: mapY(pt.score), pt }));
+    const coords = pts.map((pt, idx) => ({ idx, x: mapX(idx), y: mapY(pt.score), pt }));
+    return { W, H, pL, pR, pT, pB, mapX, mapY, coords };
+  }
+
+  function drawReadinessTrendSvg(pts, accentHex, p) {
+    if (!pts || pts.length < 2) return '<div class="card-note">最近 14 天样本积累中</div>';
+    const { W, H, pL, pR, pT, pB, mapX, mapY, coords } = buildReadinessTrendLayout(pts);
     const dPath = buildSmoothSvgPath(coords, 0.22);
     const areaD = `${dPath} L${coords[coords.length - 1].x.toFixed(1)} ${pB} L${coords[0].x.toFixed(1)} ${pB} Z`;
     const grid = [40, 60, 80, 100]
@@ -3921,15 +4284,105 @@
       .filter((v, idx, arr) => arr.indexOf(v) === idx)
       .map((i) => `<text x="${mapX(i).toFixed(1)}" y="${H - 5}" text-anchor="${i === 0 ? "start" : i === pts.length - 1 ? "end" : "middle"}" font-size="10" font-weight="600" fill="${p.text2}">${escapeHtml(pts[i].date.slice(5))}</text>`)
       .join("");
-    const dots = coords.map((c, idx) => `<circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${idx === coords.length - 1 ? "4" : "2.4"}" fill="${idx === coords.length - 1 ? accentHex : p.surfaceSolid}" stroke="${accentHex}" stroke-width="1.8"/>`).join("");
+    const dots = coords.map((c, idx) => `<circle data-rd-idx="${idx}" cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="${idx === coords.length - 1 ? "4" : "2.4"}" fill="${idx === coords.length - 1 ? accentHex : p.surfaceSolid}" stroke="${accentHex}" stroke-width="1.8"/>`).join("");
     return `
-      <svg class="apple-svg-chart" viewBox="0 0 ${W} ${H}" aria-hidden="true">
+      <svg class="apple-svg-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="近 14 天准备度趋势">
         ${grid}${ticks}
         <path d="${areaD}" fill="${accentHex}" fill-opacity="0.14"/>
         <path d="${dPath}" fill="none" stroke="${accentHex}" stroke-width="2.4" stroke-linecap="round"/>
         ${dots}
+        <g class="scrub-cursor-line" opacity="0">
+          <line x1="0" y1="${pT}" x2="0" y2="${pB}" stroke="${p.text2}" stroke-width="1.5"/>
+        </g>
+        <circle class="readiness-scrub-dot" cx="0" cy="0" r="4.8" fill="${accentHex}" stroke="${p.surfaceSolid}" stroke-width="2" opacity="0"/>
       </svg>
     `;
+  }
+
+  function bindReadinessTrendScrub(wrapEl, pts, rd, p) {
+    if (!wrapEl || !pts || pts.length < 2) return;
+    const svgEl = wrapEl.querySelector("svg");
+    if (!svgEl) return;
+    const lineEl = svgEl.querySelector(".scrub-cursor-line");
+    const dotEl = svgEl.querySelector(".readiness-scrub-dot");
+    const pointDots = svgEl.querySelectorAll("[data-rd-idx]");
+    svgEl.addEventListener("contextmenu", (e) => e.preventDefault());
+
+    const { W, coords } = buildReadinessTrendLayout(pts);
+    const defDate = rd.date || "-";
+    const defScore = rd.score != null ? String(rd.score) : "-";
+    const defStatus = rd.status || "";
+    const defColor = rd.color || p.green;
+    let lastIdx = -1;
+    let cursorVisible = false;
+
+    const applyReadout = (dateStr, scoreStr, statusStr, colorStr) => {
+      const dateEl = $("pro-readiness-date");
+      const scoreEl = $("pro-readiness-score");
+      const statusEl = $("pro-readiness-status");
+      const dotBadge = $("pro-readiness-dot");
+      if (dateEl) dateEl.textContent = dateStr;
+      if (scoreEl) scoreEl.textContent = scoreStr;
+      if (statusEl) {
+        statusEl.textContent = statusStr;
+        statusEl.style.color = colorStr;
+      }
+      if (dotBadge) dotBadge.style.background = colorStr;
+    };
+
+    const reset = () => {
+      lastIdx = -1;
+      cursorVisible = false;
+      if (lineEl) lineEl.setAttribute("opacity", "0");
+      if (dotEl) dotEl.setAttribute("opacity", "0");
+      pointDots.forEach((el) => el.setAttribute("opacity", "1"));
+      applyReadout(defDate, defScore, defStatus, defColor);
+    };
+
+    const pickAtClientX = (clientX, pointerType) => {
+      if (!coords.length) return;
+      const rect = svgEl.getBoundingClientRect();
+      const svgX = ((clientX - rect.left) / Math.max(rect.width, 1)) * W;
+      let best = coords[0];
+      let bestDist = Infinity;
+      for (let i = 0; i < coords.length; i += 1) {
+        const d = Math.abs(coords[i].x - svgX);
+        if (d < bestDist) {
+          bestDist = d;
+          best = coords[i];
+        }
+      }
+      if (!best) return;
+      if (lineEl) {
+        if (!cursorVisible) {
+          lineEl.classList.add("no-glide");
+          lineEl.style.transform = `translateX(${best.x.toFixed(1)}px)`;
+          void lineEl.getBoundingClientRect();
+          lineEl.classList.remove("no-glide");
+          cursorVisible = true;
+        } else {
+          lineEl.style.transform = `translateX(${best.x.toFixed(1)}px)`;
+        }
+        lineEl.setAttribute("opacity", "1");
+      }
+      const tier = getReadinessTier(best.pt.score);
+      if (dotEl) {
+        dotEl.setAttribute("cx", best.x.toFixed(1));
+        dotEl.setAttribute("cy", best.y.toFixed(1));
+        dotEl.setAttribute("fill", tier.color);
+        dotEl.setAttribute("opacity", "1");
+      }
+      pointDots.forEach((el) => {
+        el.setAttribute("opacity", Number(el.dataset.rdIdx) === best.idx ? "1" : "0.35");
+      });
+      if (lastIdx !== best.idx) {
+        if (pointerType !== "mouse") triggerHapticTick(lastIdx === -1 ? 10 : 8);
+        lastIdx = best.idx;
+      }
+      applyReadout(best.pt.date || "-", String(best.pt.score), tier.status, tier.color);
+    };
+
+    bindChartScrubGesture(svgEl, pickAtClientX, reset);
   }
 
   function renderProLoadTab(container, data, p) {
@@ -4090,15 +4543,17 @@
     container.innerHTML = `
       <div class="card">
         <div class="card-header" style="margin-bottom:4px;">
-          <h3 class="card-title"><span class="dot-badge" style="background:${rd.color || p.green}"></span>准备度</h3>
-          <span class="card-note">${escapeHtml(rd.date || "-")}</span>
+          <h3 class="card-title"><span id="pro-readiness-dot" class="dot-badge" style="background:${rd.color || p.green}"></span>准备度</h3>
+          <span id="pro-readiness-date" class="card-note">${escapeHtml(rd.date || "-")}</span>
         </div>
         <div class="pro-hero-row">
-          <span class="pro-hero-num">${rd.score != null ? escapeHtml(rd.score) : "-"}</span>
+          <span id="pro-readiness-score" class="pro-hero-num">${rd.score != null ? escapeHtml(rd.score) : "-"}</span>
           <span class="pro-hero-unit">分</span>
-          ${rd.status ? `<span class="pro-hero-status" style="color:${rd.color || p.green}">${escapeHtml(rd.status)}</span>` : ""}
+          <span id="pro-readiness-status" class="pro-hero-status" style="color:${rd.color || p.green}">${escapeHtml(rd.status || "")}</span>
         </div>
-        ${drawReadinessTrendSvg(rd.trend_14d || [], rd.color || p.green, p)}
+        <div id="pro-readiness-chart-wrap" class="svg-chart-wrap">
+          ${drawReadinessTrendSvg(rd.trend_14d || [], rd.color || p.green, p)}
+        </div>
         ${renderInlineDisclosureHtml("生理构成与建议", factors.length ? `${factors.length} 项指标` : "", readinessDetailHtml)}
       </div>
 
@@ -4173,6 +4628,7 @@
     `;
 
     bindAppleDisclosures(container);
+    bindReadinessTrendScrub($("pro-readiness-chart-wrap"), rd.trend_14d || [], rd, p);
     container.querySelectorAll("[data-pol]").forEach((b) => {
       b.addEventListener("click", () => {
         polarWindow = b.dataset.pol;
@@ -4406,7 +4862,7 @@
                   <button class="aerobic-run-row" data-wid="${r.workout_id}" type="button">
                     <div>
                       <div style="font-weight:700;font-size:14px;">${escapeHtml(r.sport_name)} · ${fmtNum(r.distance_km, 2)} km</div>
-                      <div class="grouped-sub">${escapeHtml(r.date)} · ${r.pace_s ? fmtPace(r.pace_s) : `${r.duration_min}m`} · 均心率 ${fmtNum(r.hr_avg, 0)}</div>
+                      <div class="grouped-sub">${escapeHtml(r.date)} · ${r.pace_s ? fmtWorkoutPace(r, r.pace_s) : `${r.duration_min}m`} · 均心率 ${fmtNum(r.hr_avg, 0)}</div>
                     </div>
                     <div style="text-align:right;">
                       <div style="font-weight:700;font-size:14px;font-variant-numeric:tabular-nums;">EF ${r.ef}</div>
@@ -4461,10 +4917,6 @@
     const daysDesc = [...days14].reverse();
     const latest = data.latest_day || daysDesc[0] || {};
     const refDate = latest.date || data.window?.end_date || "";
-
-    $("summary-date-sub").textContent = refDate
-      ? `更新至 ${refDate}`
-      : "个人健康汇总";
 
     // Hero 1: Activity Rings
     const cal = Number(latest.calories_kcal || 0);
@@ -4879,7 +5331,7 @@
               <span>${escapeHtml(w.sport_name)}</span>
               ${w.has_gps ? '<span class="gps-pill">GPS</span>' : ""}
             </div>
-            <div class="grouped-sub">${escapeHtml(w.date)} · ${escapeHtml((w.start_iso || "").slice(11, 16))}${w.pace_avg_s_per_km ? " · " + fmtPace(w.pace_avg_s_per_km) : ""}</div>
+            <div class="grouped-sub">${escapeHtml(w.date)} · ${escapeHtml((w.start_iso || "").slice(11, 16))}${w.pace_avg_s_per_km ? " · " + fmtWorkoutPace(w, w.pace_avg_s_per_km) : ""}</div>
           </div>
         </div>
         <div class="grouped-row-right">
@@ -5740,9 +6192,28 @@
     }
   }
 
+  function queueContextualMetricPreloads(data, navDir) {
+    if (!data?.metric || navDir === "resize" || !detailState) return;
+    if (data.metric === "ecg") {
+      queueEcgRecordPreloads(data.records || [], 4, true);
+      return;
+    }
+    if (data.metric === "ecg_record") return;
+    const anchorOrEmpty = data.anchor_date || detailState.endDate || "";
+    if (data.prev_end) {
+      queueMetricPreload(data.metric, data.scope, { endDate: data.prev_end });
+    }
+    const adjScopes = data.scope === "D" ? ["W"] : data.scope === "W" ? ["D", "M"] : data.scope === "M" ? ["W", "6M"] : [];
+    adjScopes.forEach((sc) => queueMetricPreload(data.metric, sc, { endDate: anchorOrEmpty }));
+    if (data.metric === "heart_rate" && data.latest_ecg?.start_ms != null) {
+      queueMetricPreload("ecg", "W", { endDate: "" });
+    }
+  }
+
   function renderMetricDetailScreen(data, navDir = "initial") {
     const body = $("metric-detail-body");
     body.classList.toggle("no-anim-replay", navDir === "resize");
+    queueContextualMetricPreloads(data, navDir);
     if (data?.metric === "ecg" || data?.metric === "ecg_record") {
       body.dataset.mountedMetric = data.metric;
       if (data.metric === "ecg_record") renderEcgRecord(body, data);
@@ -7804,9 +8275,29 @@
     browseRenderedRef = data;
   }
 
+  async function fetchDaySnapshotData(dateStr = "") {
+    const key = dateStr || "";
+    if (daySnapshotCache.has(key)) return daySnapshotCache.get(key);
+    if (daySnapshotInflight.has(key)) return daySnapshotInflight.get(key);
+    const epoch = preloadEpoch;
+    const url = key ? `/api/v1/dashboard/day?date=${encodeURIComponent(key)}` : "/api/v1/dashboard/day";
+    const req = apiJson(url)
+      .then((data) => {
+        if (epoch === preloadEpoch) {
+          cacheMapSet(daySnapshotCache, key, data, 14);
+          if (data?.date) cacheMapSet(daySnapshotCache, data.date, data, 14);
+        }
+        return data;
+      })
+      .finally(() => {
+        if (daySnapshotInflight.get(key) === req) daySnapshotInflight.delete(key);
+      });
+    daySnapshotInflight.set(key, req);
+    return req;
+  }
+
   async function loadDaySnapshot(dateStr) {
-    const url = dateStr ? `/api/v1/dashboard/day?date=${encodeURIComponent(dateStr)}` : "/api/v1/dashboard/day";
-    const data = await apiJson(url);
+    const data = await fetchDaySnapshotData(dateStr || "");
     dayCache = data;
     if (data.empty) return;
 
@@ -7894,8 +8385,130 @@
     return `${m}'${String(s).padStart(2, "0")}"`;
   }
 
+  function isCyclingWorkout(d) {
+    const id = Number(d?.sport_type_id);
+    const name = String(d?.sport_name || "");
+    return id === 259 || id === 260 || name.includes("骑");
+  }
+
+  function isSwimmingWorkout(d) {
+    const id = Number(d?.sport_type_id);
+    const name = String(d?.sport_name || "");
+    return id === 262 || id === 266 || name.includes("泳");
+  }
+
+  function paceToSpeedKmh(sPerKm) {
+    const v = Number(sPerKm);
+    return Number.isFinite(v) && v > 0 ? 3600 / v : null;
+  }
+
+  function fmtSpeedKmh(sPerKm) {
+    const kmh = paceToSpeedKmh(sPerKm);
+    return kmh == null ? "-" : `${kmh.toFixed(1)} km/h`;
+  }
+
+  function fmtSpeedKmhVal(sPerKm) {
+    const kmh = paceToSpeedKmh(sPerKm);
+    return kmh == null ? "-" : kmh.toFixed(1);
+  }
+
+  function paceToPer100m(sPerKm) {
+    const v = Number(sPerKm);
+    return Number.isFinite(v) && v > 0 ? v / 10 : null;
+  }
+
+  function fmtSwimPaceNoUnit(sPerKm) {
+    const v = paceToPer100m(sPerKm);
+    return v == null ? "-" : fmtPaceNoUnit(v);
+  }
+
+  function fmtSwimPace(sPerKm) {
+    const v = paceToPer100m(sPerKm);
+    return v == null ? "-" : `${fmtPaceNoUnit(v)}/百米`;
+  }
+
+  function fmtWorkoutPace(w, sPerKm) {
+    if (isCyclingWorkout(w)) return fmtSpeedKmh(sPerKm);
+    if (isSwimmingWorkout(w)) return fmtSwimPace(sPerKm);
+    return fmtPace(sPerKm);
+  }
+
   function renderWorkoutPace(d, palette) {
     const card = $("wo-pace-card");
+    const isCycling = isCyclingWorkout(d);
+    if (isCycling) {
+      let series = (d.gps_track || [])
+        .filter((pt) => Number.isFinite(pt.elapsed_s) && (pt.speed_kmh > 0 || pt.pace_s_per_km > 0))
+        .map((pt) => ({
+          ...pt,
+          speed_kmh: pt.speed_kmh > 0 ? Number(pt.speed_kmh) : paceToSpeedKmh(pt.pace_s_per_km),
+        }))
+        .filter((pt) => Number.isFinite(pt.speed_kmh) && pt.speed_kmh > 0);
+      let source = "轨迹速度";
+      if (series.length < 2) {
+        let elapsed = 0;
+        series = (d.splits || []).filter((s) => s.sp > 0 && s.sd > 0).map((s) => {
+          elapsed += Number(s.sd) / 100000 * Number(s.sp);
+          return { elapsed_s: elapsed, speed_kmh: paceToSpeedKmh(s.sp), time: fmtDurationSec(elapsed) };
+        }).filter((pt) => Number.isFinite(pt.speed_kmh) && pt.speed_kmh > 0);
+        source = "分段均值 · 估算用时";
+      }
+      card.classList.toggle("hidden", series.length < 2);
+      if (series.length < 2) return;
+      const avgSpeed = paceToSpeedKmh(d.pace_avg_s_per_km)
+        ?? (d.distance_m > 0 && d.duration_s > 0 ? (d.distance_m / d.duration_s) * 3.6 : null);
+      const label = avgSpeed != null ? `平均 ${avgSpeed.toFixed(1)} km/h · ${source}` : source;
+      const best = `最高速度 ${Math.max(...series.map((pt) => pt.speed_kmh)).toFixed(1)} km/h`;
+      card.innerHTML = `<div class="card-header" style="margin-bottom:8px"><div>
+        <h3 class="card-title"><span class="dot-badge" style="background:var(--fit-cyan)"></span>速度曲线（km/h）</h3>
+        <p id="wo-pace-readout" class="card-note" data-default="${escapeHtml(label)}">${escapeHtml(label)}</p></div>
+        <span class="status-pill" style="color:var(--fit-cyan)">${escapeHtml(best)}</span></div>
+        <div class="svg-chart-wrap"></div>`;
+      drawWorkoutLineChartSvg(card.querySelector(".svg-chart-wrap"), {
+        series, getX: (pt) => pt.elapsed_s, getY: (pt) => pt.speed_kmh,
+        color: "var(--fit-cyan)", cursorPrefix: "wo-speed", readoutElId: "wo-pace-readout",
+        estimated: source.startsWith("分段"), invertY: false, fallbackMin: 0, fallbackMax: 40,
+        formatTick: (v) => Number(v).toFixed(v >= 100 ? 0 : 1),
+        formatScrub: (pt, value) => `${pt.time} · ${Number(value).toFixed(1)} km/h`,
+      }, palette);
+      return;
+    }
+
+    if (isSwimmingWorkout(d)) {
+      let series = (d.gps_track || [])
+        .filter((pt) => Number.isFinite(pt.elapsed_s) && (pt.pace_s_per_100m > 0 || pt.pace_s_per_km > 0))
+        .map((pt) => ({
+          ...pt,
+          pace_s_per_100m: pt.pace_s_per_100m > 0 ? Number(pt.pace_s_per_100m) : paceToPer100m(pt.pace_s_per_km),
+        }))
+        .filter((pt) => Number.isFinite(pt.pace_s_per_100m) && pt.pace_s_per_100m > 0);
+      let source = "轨迹配速";
+      if (series.length < 2) {
+        let elapsed = 0;
+        series = (d.splits || []).filter((s) => s.sp > 0 && s.sd > 0).map((s) => {
+          elapsed += Number(s.st) > 0 ? Number(s.st) : (Number(s.sd) / 100000 * Number(s.sp));
+          return { elapsed_s: elapsed, pace_s_per_100m: paceToPer100m(s.sp), time: fmtDurationSec(elapsed) };
+        }).filter((pt) => Number.isFinite(pt.pace_s_per_100m) && pt.pace_s_per_100m > 0);
+        source = "分段均值 · 估算用时";
+      }
+      card.classList.toggle("hidden", series.length < 2);
+      if (series.length < 2) return;
+      const label = d.pace_avg_s_per_km > 0 ? "平均 " + fmtSwimPace(d.pace_avg_s_per_km) + " · " + source : source;
+      const best = "最高配速 " + fmtPaceNoUnit(Math.min(...series.map((pt) => pt.pace_s_per_100m))) + "/百米";
+      card.innerHTML = `<div class="card-header" style="margin-bottom:8px"><div>
+        <h3 class="card-title"><span class="dot-badge" style="background:var(--fit-cyan)"></span>配速曲线（/百米）</h3>
+        <p id="wo-pace-readout" class="card-note" data-default="${escapeHtml(label)}">${escapeHtml(label)}</p></div>
+        <span class="status-pill" style="color:var(--fit-cyan)">${escapeHtml(best)}</span></div>
+        <div class="svg-chart-wrap"></div>`;
+      drawWorkoutLineChartSvg(card.querySelector(".svg-chart-wrap"), {
+        series, getX: (pt) => pt.elapsed_s, getY: (pt) => pt.pace_s_per_100m,
+        color: "var(--fit-cyan)", cursorPrefix: "wo-swim-pace", readoutElId: "wo-pace-readout",
+        estimated: source.startsWith("分段"), invertY: true, formatTick: (v) => (v === 0 ? "0:00" : fmtPaceNoUnit(v)),
+        formatScrub: (pt, value) => `${pt.time} · ${fmtPaceNoUnit(value)}/百米`,
+      }, palette);
+      return;
+    }
+
     let series = (d.gps_track || []).filter(pt => Number.isFinite(pt.elapsed_s) && pt.pace_s_per_km > 0);
     let source = "轨迹配速";
     if (series.length < 2) {
@@ -8035,9 +8648,26 @@
     return out;
   }
 
+  async function fetchWorkoutsData(sport = "") {
+    const key = sport || "";
+    if (workoutsListCache.has(key)) return workoutsListCache.get(key);
+    if (workoutsListInflight.has(key)) return workoutsListInflight.get(key);
+    const epoch = preloadEpoch;
+    const url = key ? `/api/v1/dashboard/workouts?sport=${encodeURIComponent(key)}` : "/api/v1/dashboard/workouts";
+    const req = apiJson(url)
+      .then((data) => {
+        if (epoch === preloadEpoch) cacheMapSet(workoutsListCache, key, data, 8);
+        return data;
+      })
+      .finally(() => {
+        if (workoutsListInflight.get(key) === req) workoutsListInflight.delete(key);
+      });
+    workoutsListInflight.set(key, req);
+    return req;
+  }
+
   async function loadWorkouts(sport, opts = {}) {
-    const url = sport ? `/api/v1/dashboard/workouts?sport=${encodeURIComponent(sport)}` : "/api/v1/dashboard/workouts";
-    const data = await apiJson(url);
+    const data = await fetchWorkoutsData(sport || "");
     workoutsCache = data;
 
     const pills = [{ sport_name: "", label: "全部" }].concat(
@@ -8083,7 +8713,7 @@
           : fmtDurationSec(w.duration_s);
         const metaParts = [];
         if (w.distance_m && w.distance_m > 0) metaParts.push(fmtDurationSec(w.duration_s));
-        if (w.pace_avg_s_per_km) metaParts.push(fmtPace(w.pace_avg_s_per_km));
+        if (w.pace_avg_s_per_km) metaParts.push(fmtWorkoutPace(w, w.pace_avg_s_per_km));
         else if (w.calories_kcal) metaParts.push(`${fmtNum(w.calories_kcal, 0)} 千卡`);
         if (w.hr_avg) metaParts.push(`${fmtNum(w.hr_avg, 0)} bpm`);
         return `
@@ -8115,6 +8745,9 @@
 
     if (!opts.skipDetail && (opts.openDetailId || !isMobileViewport())) {
       await loadWorkoutDetail(selectedWorkoutId, isMobileViewport() && Boolean(opts.openDetailId));
+    }
+    if (currentTab === "workouts") {
+      list.slice(0, 5).forEach((w) => queueWorkoutPreload(w.workout_id));
     }
   }
 
@@ -8394,9 +9027,9 @@
     const cp = opts.cursorPrefix || `wo-c-${uid}`;
 
     const low=pts.reduce((a,b)=>a.rawY<=b.rawY?a:b),high=pts.reduce((a,b)=>a.rawY>=b.rawY?a:b);
-    const labels={"wo-pace":["配速","/km"],"wo-hr":["心率"," bpm"],"wo-cad":["步频"," spm"],"wo-elevation":["海拔"," m"],"wo-bal":["左侧触地","%"]};
+    const labels={"wo-pace":["配速","/km"],"wo-swim-pace":["配速","/百米"],"wo-speed":["速度"," km/h"],"wo-hr":["心率"," bpm"],"wo-cad":["步频"," spm"],"wo-elevation":["海拔"," m"],"wo-bal":["左侧触地","%"]};
     const [name,unit]=labels[cp] || (opts.color===p.purple?["垂直振幅"," cm"]:["触地时间"," ms"]);
-    const format=v=>cp==="wo-pace"?fmtPaceNoUnit(v)+unit:Number(v.toFixed(1))+unit;
+    const format=v=>(cp==="wo-pace"||cp==="wo-swim-pace")?fmtPaceNoUnit(v)+unit:Number(v.toFixed(1))+unit;
     overlaySeries.set(name,{name,format,points:pts,groups,low,high,gap,duration,invertY:opts.invertY,color:opts.color});
     if(opts.overlayOnly)return;
     wrapEl.innerHTML = `
@@ -8482,6 +9115,9 @@
     routeCursor?.remove(); routeCursor=null;
     $("workout-detail-card")?.classList.toggle("no-anim-replay", Boolean(noAnim));
     const p = getThemePalette();
+    const isCycling = isCyclingWorkout(d);
+    const isSwimming = isSwimmingWorkout(d);
+    const hidePosture = isCycling || isSwimming;
 
     // 1. Apple Fitness Header + Color-Coded 2-Column Details Card
     const stats = [
@@ -8490,8 +9126,19 @@
     if (d.distance_m && d.distance_m > 0) {
       stats.push({ lbl: "总距离", val: (d.distance_m / 1000).toFixed(2), unit: "公里", color: "var(--fit-cyan)" });
     }
-    if (d.pace_avg_s_per_km && d.pace_avg_s_per_km > 0) {
-      stats.push({ lbl: "平均配速", val: fmtPaceNoUnit(d.pace_avg_s_per_km), unit: "/公里", color: "var(--fit-cyan)" });
+    if (isCycling) {
+      const avgKmh = paceToSpeedKmh(d.pace_avg_s_per_km)
+        ?? (d.distance_m > 0 && d.duration_s > 0 ? (d.distance_m / d.duration_s) * 3.6 : null);
+      if (avgKmh && avgKmh > 0) {
+        stats.push({ lbl: "平均速度", val: avgKmh.toFixed(1), unit: "km/h", color: "var(--fit-cyan)" });
+      }
+    } else if (d.pace_avg_s_per_km && d.pace_avg_s_per_km > 0) {
+      stats.push({
+        lbl: "平均配速",
+        val: isSwimming ? fmtSwimPaceNoUnit(d.pace_avg_s_per_km) : fmtPaceNoUnit(d.pace_avg_s_per_km),
+        unit: isSwimming ? "/百米" : "/公里",
+        color: "var(--fit-cyan)",
+      });
     }
     if (d.calories_kcal && d.calories_kcal > 0) {
       stats.push({ lbl: "动态千卡", val: fmtNum(d.calories_kcal, 0), unit: "千卡", color: "var(--fit-red)" });
@@ -8506,7 +9153,16 @@
       stats.push({ lbl: "平均步频", val: fmtNum(d.cadence_avg_spm, 0), unit: "步/分", color: "var(--fit-green)" });
     }
     if (d.pace_best_s_per_km && d.pace_best_s_per_km > 0) {
-      stats.push({ lbl: "最佳配速", val: fmtPaceNoUnit(d.pace_best_s_per_km), unit: "/公里", color: "var(--fit-purple)" });
+      if (isCycling) {
+        stats.push({ lbl: "最佳速度", val: fmtSpeedKmhVal(d.pace_best_s_per_km), unit: "km/h", color: "var(--fit-purple)" });
+      } else {
+        stats.push({
+          lbl: "最佳配速",
+          val: isSwimming ? fmtSwimPaceNoUnit(d.pace_best_s_per_km) : fmtPaceNoUnit(d.pace_best_s_per_km),
+          unit: isSwimming ? "/百米" : "/公里",
+          color: "var(--fit-purple)",
+        });
+      }
     }
 
     const tm = d.training_metrics || {};
@@ -8520,7 +9176,7 @@
     }
     if (tm.vo2max) tBadges.push(`<span class="wo-tbadge" style="color:var(--fit-red)">VO₂ Max ${fmtNum(tm.vo2max, 1)}</span>`);
 
-    const priority=["锻炼时长","总距离","平均配速","平均心率"];
+    const priority=["锻炼时长","总距离",isCycling?"平均速度":"平均配速","平均心率"];
     stats.sort((a,b)=>(priority.includes(a.lbl)?priority.indexOf(a.lbl):10)-(priority.includes(b.lbl)?priority.indexOf(b.lbl):10));
     const lastRowThreshold = stats.length - (stats.length % 2 === 0 ? 2 : 1);
     $("wo-apple-header-card").innerHTML = `
@@ -8724,35 +9380,53 @@
         hr: s.shr || "-",
         cad: s.sc || "-",
       }));
-      const paceCandidates = parsedSplits.filter((s) => s.pace > 0 && (Math.abs(s.dist_m-1000)<=5));
+      let swimStdDist = 100;
+      if (isSwimming) {
+        const distCounts = new Map();
+        parsedSplits.forEach((s) => {
+          if (s.dist_m >= 20) {
+            const k = Math.round(s.dist_m);
+            distCounts.set(k, (distCounts.get(k) || 0) + 1);
+          }
+        });
+        let bestC = 0;
+        distCounts.forEach((c, k) => {
+          if (c > bestC) { bestC = c; swimStdDist = k; }
+        });
+      }
+      const isFullSplit = (s) => isSwimming ? (swimStdDist > 0 && Math.abs(s.dist_m - swimStdDist) <= 2) : (Math.abs(s.dist_m - 1000) <= 5);
+      const paceCandidates = parsedSplits.filter((s) => s.pace > 0 && isFullSplit(s));
       const minPace = paceCandidates.length ? Math.min(...paceCandidates.map((s) => s.pace)) : 0;
       const maxPace = paceCandidates.length ? Math.max(...paceCandidates.map((s) => s.pace)) : 0;
       const allValidPaces = parsedSplits.filter((s) => s.pace > 0).map((s) => s.pace);
       const fastestRef = minPace || (allValidPaces.length ? Math.min(...allValidPaces) : 0);
+      const fastestLbl = isSwimming ? `最快分段 ${fmtSwimPace(minPace)}` : `最快完整公里 ${isCycling ? fmtSpeedKmh(minPace) : fmtPace(minPace)}`;
 
       splitsCard.innerHTML = `
         <div class="card-header" style="margin-bottom:6px;">
           <div>
-            <h3 class="card-title"><span class="dot-badge" style="background:var(--fit-cyan)"></span>分段配速</h3>
-            <p class="card-note">共 ${parsedSplits.length} 段 · 设备分段${minPace ? " · 最快完整公里 "+fmtPace(minPace) : ""}</p>
+            <h3 class="card-title"><span class="dot-badge" style="background:var(--fit-cyan)"></span>${isCycling ? "分段速度" : "分段配速"}</h3>
+            <p class="card-note">共 ${parsedSplits.length} 段 · 设备分段${minPace ? " · " + fastestLbl : ""}</p>
           </div>
         </div>
         <div class="splits-list">
           ${parsedSplits
             .map((s) => {
-              const isFastest = minPace > 0 && s.pace === minPace && parsedSplits.length > 1 && Math.abs(s.dist_m-1000)<=5;
+              const isFastest = minPace > 0 && s.pace === minPace && parsedSplits.length > 1 && isFullSplit(s);
               const barPct = s.pace > 0
-                ? (maxPace > minPace && Math.abs(s.dist_m-1000)<=5
+                ? (maxPace > minPace && isFullSplit(s)
                     ? Math.round(52 + ((maxPace - s.pace) / (maxPace - minPace)) * 46)
                     : Math.max(18, Math.min(96, Math.round((fastestRef / s.pace) * 96))))
                 : 20;
-              const segLabel = Math.abs(s.dist_m-1000)<=5 ? `第${escapeHtml(s.sn)}公里` : `${fmtNum(s.dist_m, 0)}米`;
+              const segLabel = isSwimming
+                ? (Math.abs(s.dist_m - 100) <= 2 ? `第${escapeHtml(s.sn)}百米` : `#${escapeHtml(s.sn)} · ${fmtNum(s.dist_m, 0)}米`)
+                : (Math.abs(s.dist_m - 1000) <= 5 ? `第${escapeHtml(s.sn)}公里` : `${fmtNum(s.dist_m, 0)}米`);
               return `
                 <div class="split-row">
                   <div class="split-idx">${segLabel}${s.duration>0?`<small class="seg-time">${fmtDurationSec(s.duration)}</small>`:""}</div>
                   <div class="split-bar-wrap">
                     <div class="split-bar-top">
-                      <span class="split-pace-num">${s.pace > 0 ? fmtPace(s.pace) : "-"}</span>
+                      <span class="split-pace-num">${s.pace > 0 ? (isCycling ? fmtSpeedKmh(s.pace) : (isSwimming ? fmtSwimPace(s.pace) : fmtPace(s.pace))) : "-"}</span>
                       ${isFastest ? '<span class="split-fast-pill">最快</span>' : ""}
                     </div>
                     <div class="split-bar-track">
@@ -8780,7 +9454,11 @@
       if (bm && bm.ef != null) {
         bioCard.classList.remove("hidden");
         const decVal = bm.decoupling_pct != null ? `${bm.decoupling_pct > 0 ? "+" : ""}${bm.decoupling_pct}%` : "-";
-        const pacePair = bm.first_half_pace && bm.second_half_pace ? `${bm.first_half_pace.replace(/\s*\/km$/i, "")} → ${bm.second_half_pace.replace(/\s*\/km$/i, "")}` : "全程均速";
+        const pacePair = bm.first_half_pace && bm.second_half_pace
+          ? (isSwimming
+              ? `${bm.first_half_pace.replace(/\s*\/百米$/i, "")} → ${bm.second_half_pace}`
+              : `${bm.first_half_pace.replace(/\s*\/km$/i, "")} → ${bm.second_half_pace.replace(/\s*\/km$/i, "")}`)
+          : (isCycling ? "全程匀速" : "全程均速");
         const shortStrategy = String(bm.pace_strategy || "-").split(" · ")[0];
         const drifts = bm.drift_rows || [];
         const driftDetailHtml = `
@@ -8808,7 +9486,7 @@
 
         bioCard.innerHTML = `
           <div class="card-header" style="margin-bottom:6px;">
-            <h3 class="card-title"><span class="dot-badge" style="background:var(--apple-indigo)"></span>有氧效率与跑姿</h3>
+            <h3 class="card-title"><span class="dot-badge" style="background:var(--apple-indigo)"></span>${hidePosture ? "有氧效率" : "有氧效率与跑姿"}</h3>
           </div>
           <div class="apple-stat-strip">
             <div>
@@ -8820,12 +9498,12 @@
               <div class="apple-stat-val" style="color:${escapeHtml(bm.decoupling_color || p.text)}">${escapeHtml(decVal)}</div>
             </div>
             <div>
-              <div class="apple-stat-lbl">配速策略</div>
+              <div class="apple-stat-lbl">${isCycling ? "速度策略" : "配速策略"}</div>
               <div class="apple-stat-val apple-stat-val-sm">${escapeHtml(shortStrategy)}</div>
               <div class="apple-stat-sub">${escapeHtml(pacePair)}</div>
             </div>
           </div>
-          ${renderInlineDisclosureHtml("跑姿衰减与分析明细", drifts.length ? `${drifts.length} 项对比` : "", driftDetailHtml)}
+          ${renderInlineDisclosureHtml(hidePosture ? "效率衰减与分析明细" : "跑姿衰减与分析明细", drifts.length ? `${drifts.length} 项对比` : "", driftDetailHtml)}
         `;
         bindAppleDisclosures(bioCard);
       } else {
@@ -9089,9 +9767,18 @@
   async function fetchWorkoutData(wid) {
     const key = String(wid);
     if (workoutQueryCache.has(key)) return workoutQueryCache.get(key);
-    const data = await apiJson(`/api/v1/dashboard/workout?id=${wid}&max_points=1000`);
-    cacheMapSet(workoutQueryCache, key, data, 12);
-    return data;
+    if (workoutInflight.has(key)) return workoutInflight.get(key);
+    const epoch = preloadEpoch;
+    const req = apiJson(`/api/v1/dashboard/workout?id=${wid}&max_points=1000`)
+      .then((data) => {
+        if (epoch === preloadEpoch) cacheMapSet(workoutQueryCache, key, data, 24);
+        return data;
+      })
+      .finally(() => {
+        if (workoutInflight.get(key) === req) workoutInflight.delete(key);
+      });
+    workoutInflight.set(key, req);
+    return req;
   }
 
   async function loadWorkoutDetail(wid, openMobileDetail = false, originOrMeta = null, extraOpts = {}) {
@@ -9308,29 +9995,6 @@
       <div class="kv-row"><span class="kv-k">单次训练记录</span><span class="kv-v">${fmtNum(c.workouts)} 次</span></div>
       <div class="kv-row"><span class="kv-k">最近导入时间</span><span class="kv-v">${escapeHtml(meta.last_synced_iso || "-")}</span></div>
     `;
-
-    const devs = st.devices || [];
-    $("sys-devices-box").innerHTML = `
-      <table>
-        <thead><tr><th>ID</th><th>设备名称</th><th>型号</th><th>厂商</th><th>系统/固件</th></tr></thead>
-        <tbody>
-          ${devs
-            .map(
-              (d) => `
-            <tr>
-              <td>${d.id}</td>
-              <td>${escapeHtml(d.device_name || "-")}</td>
-              <td>${escapeHtml(d.model || "-")}</td>
-              <td>${escapeHtml(d.manufacturer || "-")}</td>
-              <td>${escapeHtml(d.firmware_version || "-")}</td>
-            </tr>
-          `
-            )
-            .join("")}
-        </tbody>
-      </table>
-    `;
-
   }
 
   startOfflinePanel();

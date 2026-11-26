@@ -36,11 +36,11 @@ ANDROID_HOME=/opt/antigem/android-sdk ./gradlew -Pandroid.aapt2FromMavenOverride
 - **打开应用自动同步与无变更跳过**：冷启动及切回前台（15 秒冷却防抖）时，立即显示本地数据并在后台通过 `su -M` 调用内置 `libhwh_keyrecover.so` 检查 `/data/data/com.huawei.health/databases/hihealth_003.db`；若源库 `mtime` 与大小未变则通过 `--if-changed` 直接跳过重复拷贝和解密；若有更新，则复用 `AndroidKeyStore`（AES-256-GCM）缓存的密钥（或在失效时从 `com.huawei.health:DaemonService` 内存自动恢复），在本地解密后通过 `local_panel.py` 执行非阻塞增量解析并原子替换 `panel.sqlite`，完成后自动刷新当前面板。
 - **沉浸式状态栏与导航栏**：全屏 Edge-to-Edge 延展粉蓝柔和渐变与 OLED 纯黑背景至状态栏及手势条区域，自动注入安全区边距并与浅色/OLED 深色外观实时同步状态栏及导航栏图标明暗对比度。
 - **长下拉自动增量刷新**：在主页顶部向下长拉触发 iOS 26 Liquid Glass 进度胶囊与原生触感反馈，松开即通过 `--if-changed` 快速增量检查并刷新最新健康数据。
-- **原生图表拖动震动与高德在线地图底图**：通过 `VIBRATE` + `VibratorManager`（`USAGE_TOUCH`）提供与网页版一致的图表滑动与胶囊底栏拖动逐格震动；训练轨迹详情恢复高德矢量 / 高德暗黑 / 高德卫星 / ArcGIS 街景底图切换（仅放行白名单 HTTPS 地图瓦片域名，健康数据仍 100% 本地离线解析）。
+- **原生图表拖动震动与高德在线地图底图**：通过 `VIBRATE` + `VibratorManager`（`USAGE_TOUCH`）提供与网页版一致的图表滑动与胶囊底栏拖动逐格震动；训练轨迹详情恢复高德矢量 / 高德暗黑 / 高德卫星底图切换（仅放行白名单 HTTPS 地图瓦片域名，健康数据仍 100% 本地离线解析）。
 - **Apple Health 风格首次使用指南**：首次进入提供 Root 授权、激活华为运动健康、自动同步/下拉刷新与本地 Keystore 安全说明，也可随时在「更多 → 首次使用指南」重新查看。
 - **网站样式无缝融合**：「更多 → 华为运动健康自动同步」支持开关自动同步、查看密钥缓存状态、立即同步、强制重新获取密钥以及清除本地数据；手机端顶栏/桌面端状态胶囊可直接点击同步并实时显示解密进度。
 - **保留手动导入**：未授予 Root 时仍可通过「手动导入本地数据库」导入快照与密钥。
-- 本地 JavaScript 和样式来自已部署网站。地图采用 [Leaflet](https://leafletjs.com/) + 高德地图 / ArcGIS 公开 HTTPS 瓦片服务，对应许可证与原有玻璃界面库的许可证一同包含在 APK 中。
+- 本地 JavaScript 和样式来自已部署网站。地图采用 [Leaflet](https://leafletjs.com/) + 高德地图公开 HTTPS 瓦片服务，对应许可证与原有玻璃界面库的许可证一同包含在 APK 中。
 
 ```sh
 ANDROID_HOME=/opt/antigem/android-sdk ./gradlew -Pandroid.aapt2FromMavenOverride="$PWD/.tooling/bin/aapt2" :panel:testDebugUnitTest :panel:assembleDebug

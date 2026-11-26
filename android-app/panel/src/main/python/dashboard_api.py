@@ -231,6 +231,12 @@ def _fmt_pace_cn(s_per_km: float) -> str:
     return f"{m}'{s:02d}\"/km"
 
 
+def _fmt_pace_100m_cn(s_per_km: float) -> str:
+    total = int(round(s_per_km / 10.0))
+    m, s = divmod(total, 60)
+    return f"{m}'{s:02d}\"/百米"
+
+
 def _predict_race_times(rai: float | None) -> list[dict[str, str]]:
     if rai is None or rai <= 0:
         return []
@@ -1319,6 +1325,11 @@ def _compute_workout_biomechanics(
     splits: list[dict[str, Any]],
 ) -> dict[str, Any] | None:
     """Compute Efficiency Factor (EF), Aerobic Decoupling (Pw:Hr), pacing split & late-run form drift."""
+    sport_id = int(row.get("sport_type_id") or 0)
+    sport_name = str(row.get("sport_name") or "")
+    is_cycling = sport_id in (259, 260) or ("骑" in sport_name)
+    is_swimming = sport_id in (262, 266) or ("泳" in sport_name)
+
     dur_s = float(row.get("duration_s") or 0)
     dist_m = float(row.get("distance_m") or 0)
     hr_avg = float(row.get("hr_avg") or 0)
@@ -1356,7 +1367,8 @@ def _compute_workout_biomechanics(
                 if not hrs and hr_samples:
                     s_t, e_t = int(pts_seg[0][0]), int(pts_seg[-1][0])
                     hrs = [hv for ts, hv in hr_samples if s_t <= ts <= e_t]
-                if sd < 150 or dt_min < 1.5 or not hrs:
+                min_seg_d = 50.0 if is_swimming else 150.0
+                if sd < min_seg_d or dt_min < 1.5 or not hrs:
                     return None, None
                 avg_h = sum(hrs) / len(hrs)
                 pace_s = (dt_min * 60.0) / (sd / 1000.0)
@@ -1371,7 +1383,8 @@ def _compute_workout_biomechanics(
 
     # Fallback: Splits halves when GPS HR track wasn't embedded
     if decoupling_pct is None and len(splits) >= 2:
-        full_sp = [s for s in splits if float(s.get("sp") or 0) > 0 and float(s.get("sd") or 0) >= 25000]
+        min_split_sd = 2500.0 if is_swimming else 25000.0
+        full_sp = [s for s in splits if float(s.get("sp") or 0) > 0 and float(s.get("sd") or 0) >= min_split_sd]
         if len(full_sp) >= 2:
             mid_i = len(full_sp) // 2
             sp1, sp2 = full_sp[:mid_i], full_sp[mid_i:]
@@ -1402,15 +1415,38 @@ def _compute_workout_biomechanics(
     else:
         dec_lbl, dec_col = "数据不足", "#8E8E93"
 
-    pace_strategy = "配速稳定"
+    def _fmt_seg_speed_or_pace(p_s: float) -> str:
+        if is_cycling:
+            return f"{3600.0 / p_s:.1f} km/h"
+        if is_swimming:
+            return _fmt_pace_100m_cn(p_s)
+        return _fmt_pace_cn(p_s)
+
+    pace_strategy = "速度稳定" if is_cycling else "配速稳定"
     if h1_pace_s and h2_pace_s:
         diff_p = h2_pace_s - h1_pace_s
-        if diff_p <= -5.0:
-            pace_strategy = "负配速 · 后程加速"
-        elif diff_p >= 8.0:
-            pace_strategy = "正配速 · 前快后慢"
+        if is_cycling:
+            if diff_p <= -5.0:
+                pace_strategy = "后程加速"
+            elif diff_p >= 8.0:
+                pace_strategy = "前快后慢"
+            else:
+                pace_strategy = "均匀速度"
+        elif is_swimming:
+            diff_100m = diff_p / 10.0
+            if diff_100m <= -3.0:
+                pace_strategy = "负配速 · 后程加速"
+            elif diff_100m >= 5.0:
+                pace_strategy = "正配速 · 前快后慢"
+            else:
+                pace_strategy = "均匀配速"
         else:
-            pace_strategy = "均匀配速"
+            if diff_p <= -5.0:
+                pace_strategy = "负配速 · 后程加速"
+            elif diff_p >= 8.0:
+                pace_strategy = "正配速 · 前快后慢"
+            else:
+                pace_strategy = "均匀配速"
 
     # Early (first 1/3) vs Late (final 1/3) fatigue drift across telemetry series
     drift_rows: list[dict[str, Any]] = []
@@ -1441,10 +1477,11 @@ def _compute_workout_biomechanics(
 
     if len(hr_samples) >= 6:
         _add_drift([{"hr": v} for _, v in hr_samples], "hr", "心率漂移", "bpm", 0, True)
-    _add_drift(cad_series, "spm", "步频维持", "spm", 0, False)
-    _add_drift(post_series, "gct_ms", "触地时间", "ms", 0, True)
-    _add_drift(post_series, "vo_cm", "垂直振幅", "cm", 1, True)
-    _add_drift(post_series, "gtb_left", "左脚触地占比", "%", 1, None)
+    if not is_cycling and not is_swimming:
+        _add_drift(cad_series, "spm", "步频维持", "spm", 0, False)
+        _add_drift(post_series, "gct_ms", "触地时间", "ms", 0, True)
+        _add_drift(post_series, "vo_cm", "垂直振幅", "cm", 1, True)
+        _add_drift(post_series, "gtb_left", "左脚触地占比", "%", 1, None)
 
     verdict_parts = [f"有氧效率系数 EF {ef}"]
     if decoupling_pct is not None:
@@ -1452,7 +1489,7 @@ def _compute_workout_biomechanics(
             f"前后半程有氧解耦 {decoupling_pct:+.1f}%（{dec_lbl}）"
         )
     if h1_pace_s and h2_pace_s:
-        verdict_parts.append(f"前半程 {_fmt_pace_cn(h1_pace_s)} → 后半程 {_fmt_pace_cn(h2_pace_s)}")
+        verdict_parts.append(f"前半程 {_fmt_seg_speed_or_pace(h1_pace_s)} → 后半程 {_fmt_seg_speed_or_pace(h2_pace_s)}")
     verdict = "，".join(verdict_parts) + "。"
 
     return {
@@ -1461,8 +1498,8 @@ def _compute_workout_biomechanics(
         "decoupling_label": dec_lbl,
         "decoupling_color": dec_col,
         "pace_strategy": pace_strategy,
-        "first_half_pace": _fmt_pace_cn(h1_pace_s) if h1_pace_s else None,
-        "second_half_pace": _fmt_pace_cn(h2_pace_s) if h2_pace_s else None,
+        "first_half_pace": _fmt_seg_speed_or_pace(h1_pace_s) if h1_pace_s else None,
+        "second_half_pace": _fmt_seg_speed_or_pace(h2_pace_s) if h2_pace_s else None,
         "drift_rows": drift_rows,
         "verdict": verdict,
     }
@@ -1497,7 +1534,7 @@ def get_pro_insights(db_path: str | Path) -> dict[str, Any]:
             dict(r)
             for r in con.execute(
                 """
-                SELECT start_ms, end_ms, date, duration_s, sport_name, distance_m, calories_kcal,
+                SELECT start_ms, end_ms, date, duration_s, sport_type_id, sport_name, distance_m, calories_kcal,
                        hr_avg, hr_max, pace_avg_s_per_km, avg_gct_ms, has_gps, running_dynamics_json, splits_json, track_points_gz
                 FROM workouts
                 ORDER BY start_ms ASC;
@@ -1879,6 +1916,7 @@ def get_pro_insights(db_path: str | Path) -> dict[str, Any]:
         ef_series.append({
             "workout_id": w["start_ms"],
             "date": w["date"],
+            "sport_type_id": w.get("sport_type_id"),
             "sport_name": w["sport_name"],
             "distance_km": round(dist_m / 1000.0, 2),
             "duration_min": round(dur_s / 60.0, 1),
@@ -2047,7 +2085,7 @@ def get_overview(db_path: str | Path, days: int = 30) -> dict[str, Any]:
                 """
                 SELECT start_ms AS workout_id, date, start_iso,
                        ROUND(duration_s, 1) AS duration_s,
-                       sport_name, distance_m, calories_kcal, hr_avg, pace_avg_s_per_km, has_gps
+                       sport_type_id, sport_name, distance_m, calories_kcal, hr_avg, pace_avg_s_per_km, has_gps
                 FROM workouts
                 ORDER BY start_ms DESC
                 LIMIT 5;
@@ -2457,6 +2495,12 @@ def get_workout_detail_full(db_path: str | Path, workout_id: int, max_points: in
                     max_grade = max(max_grade, g)
 
         # Compute smoothed local pace across track indices
+        sport_id_cur = int(row["sport_type_id"] or 0)
+        sport_name_cur = str(row["sport_name"] or "")
+        is_cycling = sport_id_cur in (259, 260) or ("骑" in sport_name_cur)
+        is_swimming = sport_id_cur in (262, 266) or ("泳" in sport_name_cur)
+        min_pace_v = 36.0 if is_cycling else (400.0 if is_swimming else 120.0)
+        max_pace_v = 6000.0 if is_swimming else 1500.0
         n = len(raw_pts)
         paced_pts: list[float | None] = [None] * n
         cum_dist = [0.0] * n
@@ -2470,7 +2514,7 @@ def get_workout_detail_full(db_path: str | Path, workout_id: int, max_points: in
             dt_seg = (raw_pts[j1][0] - raw_pts[j0][0]) / 1000.0
             if dist_seg >= 8.0 and dt_seg >= 2.0:
                 pace_v = dt_seg / (dist_seg / 1000.0)
-                if 120.0 <= pace_v <= 1500.0:
+                if min_pace_v <= pace_v <= max_pace_v:
                     paced_pts[i] = round(pace_v, 1)
 
         if n <= max_points:
@@ -2494,6 +2538,8 @@ def get_workout_detail_full(db_path: str | Path, workout_id: int, max_points: in
                 "hr": raw_pts[i][4],
                 "cad": raw_pts[i][5],
                 "pace_s_per_km": paced_pts[i],
+                "pace_s_per_100m": round(paced_pts[i] / 10.0, 1) if paced_pts[i] else None,
+                "speed_kmh": round(3600.0 / paced_pts[i], 2) if paced_pts[i] else None,
             }
             for i in sampled_idxs
         ]
@@ -3001,7 +3047,7 @@ def get_metric_detail(
                 for r in con.execute(
                     """
                     SELECT start_ms AS workout_id, date, start_iso, ROUND(duration_s, 1) AS duration_s,
-                           sport_name, distance_m, calories_kcal, hr_avg, pace_avg_s_per_km, has_gps
+                           sport_type_id, sport_name, distance_m, calories_kcal, hr_avg, pace_avg_s_per_km, has_gps
                     FROM workouts WHERE date = ? ORDER BY start_ms ASC;
                     """,
                     (str(anchor_end),),

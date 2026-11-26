@@ -38,6 +38,7 @@ internal object PanelSyncManager {
         val autoSyncOnOpen: Boolean = true,
         val revision: Int = 0,
         val syncResult: String? = null,
+        val syncTrigger: String? = null,
         val eventSeq: Int = 0,
     ) {
         fun toJson(): String = JSONObject().apply {
@@ -51,6 +52,7 @@ internal object PanelSyncManager {
             put("auto_sync_on_open", autoSyncOnOpen)
             put("revision", revision)
             put("sync_result", syncResult ?: JSONObject.NULL)
+            put("sync_trigger", syncTrigger ?: JSONObject.NULL)
             put("event_seq", eventSeq)
         }.toString()
     }
@@ -119,6 +121,7 @@ internal object PanelSyncManager {
                 needsHuaweiHealth = false,
                 revision = state.revision + 1,
                 syncResult = "updated",
+                syncTrigger = null,
                 eventSeq = state.eventSeq + 1,
             ),
         )
@@ -188,6 +191,7 @@ internal object PanelSyncManager {
             error = false,
             needsHuaweiHealth = false,
             syncResult = null,
+            syncTrigger = trigger.name.lowercase(),
         )
         updateState(pending)
 
@@ -215,6 +219,7 @@ internal object PanelSyncManager {
                     hasCachedKey = false,
                     revision = state.revision + 1,
                     syncResult = "updated",
+                    syncTrigger = null,
                     eventSeq = state.eventSeq + 1,
                 )
                 updateState(updated)
@@ -287,6 +292,7 @@ internal object PanelSyncManager {
                         error = false,
                         needsHuaweiHealth = false,
                         syncResult = "unchanged",
+                        syncTrigger = trigger.name.lowercase(),
                         eventSeq = state.eventSeq + 1,
                     )
                     break
@@ -372,6 +378,7 @@ internal object PanelSyncManager {
                     hasCachedKey = keyCache.hasKey(),
                     revision = state.revision + 1,
                     syncResult = "updated",
+                    syncTrigger = trigger.name.lowercase(),
                     eventSeq = state.eventSeq + 1,
                 )
                 break
@@ -383,6 +390,7 @@ internal object PanelSyncManager {
                     error = true,
                     needsHuaweiHealth = e.needsHuaweiHealth,
                     syncResult = "error",
+                    syncTrigger = trigger.name.lowercase(),
                     eventSeq = state.eventSeq + 1,
                 )
                 break
@@ -398,6 +406,7 @@ internal object PanelSyncManager {
                     error = true,
                     needsHuaweiHealth = false,
                     syncResult = "error",
+                    syncTrigger = trigger.name.lowercase(),
                     eventSeq = state.eventSeq + 1,
                 )
                 break
@@ -414,6 +423,7 @@ internal object PanelSyncManager {
                     error = true,
                     needsHuaweiHealth = false,
                     syncResult = "error",
+                    syncTrigger = trigger.name.lowercase(),
                     eventSeq = state.eventSeq + 1,
                 )
                 break
@@ -425,6 +435,7 @@ internal object PanelSyncManager {
                     error = true,
                     needsHuaweiHealth = false,
                     syncResult = "error",
+                    syncTrigger = trigger.name.lowercase(),
                     eventSeq = state.eventSeq + 1,
                 )
                 break
@@ -436,6 +447,7 @@ internal object PanelSyncManager {
                     error = true,
                     needsHuaweiHealth = false,
                     syncResult = "error",
+                    syncTrigger = trigger.name.lowercase(),
                     eventSeq = state.eventSeq + 1,
                 )
                 break

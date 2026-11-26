@@ -110,6 +110,7 @@ class HuaweiHealthSyncTest {
     @Test fun syncStateTracksPullResultAndEventSequence() {
         val defaults = PanelSyncManager.SyncState()
         assertNull(defaults.syncResult)
+        assertNull(defaults.syncTrigger)
         assertEquals(0, defaults.eventSeq)
 
         val completed = defaults.copy(
@@ -117,11 +118,14 @@ class HuaweiHealthSyncTest {
             message = "已是最新健康数据",
             shortLabel = "已是最新",
             syncResult = "unchanged",
+            syncTrigger = "auto",
             eventSeq = 4,
         )
         assertEquals("unchanged", completed.syncResult)
+        assertEquals("auto", completed.syncTrigger)
         assertEquals(4, completed.eventSeq)
         assertEquals("已是最新健康数据", completed.message)
+        assertTrue(completed.toJson().contains("\"sync_trigger\":\"auto\""))
         assertEquals(3, PanelSyncManager.SyncTrigger.entries.size)
     }
 
@@ -130,7 +134,7 @@ class HuaweiHealthSyncTest {
             assertTrue(MapTilePolicy.isAllowed("https", "webrd0$sub.is.autonavi.com"))
             assertTrue(MapTilePolicy.isAllowed("https", "webst0$sub.is.autonavi.com"))
         }
-        assertTrue(MapTilePolicy.isAllowed("HTTPS", "Server.ArcGISOnline.com", 443))
+        assertFalse(MapTilePolicy.isAllowed("HTTPS", "Server.ArcGISOnline.com", 443))
 
         assertFalse(MapTilePolicy.isAllowed("http", "webrd01.is.autonavi.com"))
         assertFalse(MapTilePolicy.isAllowed("https", "webrd01.is.autonavi.com", 8443))
