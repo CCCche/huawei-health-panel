@@ -1,0 +1,38 @@
+# Secrets, credentials, local sync scripts & runtime state
+config.json
+.state/
+.staging/
+.gemini/
+sync_now.sh
+extract_and_sync.py
+
+# Databases, backups, keys & build releases
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.apk
+*.aab
+*.jks
+*.keystore
+*.pem
+*.key
+*.hex
+android-app/releases/
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Android / Gradle / IDE
+.gradle/
+.kotlin/
+.tooling/
+**/build/
+local.properties
+.idea/
+*.iml
+captures/
+.DS_Store

@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta id="theme-color-meta" name="theme-color" content="#F2F2F7">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <title>健康 · 个人健康面板</title>
+  <script>
+    (function () {
+      var docEl = document.documentElement;
+      function applyInsets(t, r, b, l) {
+        var dpr = Math.max(1, window.devicePixelRatio || 1);
+        var vals = [t, r, b, l].map(function (v) {
+          var n = Number(v);
+          return Number.isFinite(n) && n > 0 ? (n / dpr).toFixed(2) + "px" : "0px";
+        });
+        docEl.style.setProperty("--app-safe-top", vals[0]);
+        docEl.style.setProperty("--app-safe-right", vals[1]);
+        docEl.style.setProperty("--app-safe-bottom", vals[2]);
+        docEl.style.setProperty("--app-safe-left", vals[3]);
+      }
+      window.__applySafeAreaInsets = function (t, r, b, l) {
+        applyInsets(t, r, b, l);
+        try {
+          localStorage.setItem("hwh_safe_insets", JSON.stringify([t, r, b, l]));
+        } catch (e) {}
+      };
+      try {
+        var cachedInsets = JSON.parse(localStorage.getItem("hwh_safe_insets") || "null");
+        if (Array.isArray(cachedInsets) && cachedInsets.length === 4) {
+          applyInsets(cachedInsets[0], cachedInsets[1], cachedInsets[2], cachedInsets[3]);
+        }
+      } catch (e) {}
+      try {
+        var t = localStorage.getItem("hwh_theme") || "light";
+        if (t !== "light" && t !== "dark") t = "light";
+        docEl.dataset.theme = t;
+        var m = document.getElementById("theme-color-meta");
+        if (m) m.content = t === "dark" ? "#000000" : "#F2F2F7";
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="manifest" href="/manifest.json">
+  <link rel="icon" type="image/svg+xml" href="/icon.svg">
+  <link rel="stylesheet" href="/static/dashboard-glass.css?v=1">
+  <link rel="stylesheet" href="/static/style.css?v=87">
+  <link rel="stylesheet" href="/static/vendor/leaflet.css">
+</head>
+<body>
+  <!-- iOS 26 Liquid Glass Optical Refraction Filter (isolated to ::before backdrop layer) -->
+  <svg class="svg-defs" aria-hidden="true" width="0" height="0">
+    <defs>
+      <filter id="lg-refract-pill" x="-12%" y="-12%" width="124%" height="124%" color-interpolation-filters="sRGB">
+        <feTurbulence type="fractalNoise" baseFrequency="0.011 0.016" numOctaves="2" seed="7" result="lgNoise"/>
+        <feGaussianBlur in="lgNoise" stdDeviation="2.4" result="lgSmooth"/>
+        <feDisplacementMap in="SourceGraphic" in2="lgSmooth" scale="12" xChannelSelector="R" yChannelSelector="G"/>
+      </filter>
+    </defs>
+  </svg>
+
+  <!-- 主应用 -->
+  <div id="app-shell" class="app-shell hidden">
+    <!-- 桌面端左侧栏（方案 A：4 栏） -->
+    <aside class="sidebar" aria-label="主导航">
+      <div class="sidebar-top">
+        <div class="sidebar-brand">
+          <img src="/icon.svg" alt="健康">
+          <div>
+            <div class="brand-name">健康</div>
+            <div class="brand-sub" id="sidebar-sync-text">已同步</div>
+          </div>
+        </div>
+      </div>
+
+      <nav class="sidebar-nav">
+        <button class="nav-item active" data-tab="summary" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path class="tab-heart-path" d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          <span>摘要</span>
+        </button>
+        <button class="nav-item" data-tab="workouts" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13" cy="5" r="2"/><path d="M7 21l3-6 2.5 1.5L15 21"/><path d="M6 12l4-3 3 2 4-3"/><path d="M10 9l-1 5"/></svg>
+          <span>体能训练</span>
+        </button>
+        <button class="nav-item" data-tab="browse" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="2.2"/><rect x="13" y="3" width="8" height="8" rx="2.2"/><rect x="3" y="13" width="8" height="8" rx="2.2"/><rect x="13" y="13" width="8" height="8" rx="2.2"/></svg>
+          <span>浏览</span>
+        </button>
+        <button class="nav-item" data-tab="more" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>更多</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <button id="sidebar-theme-btn" class="sidebar-util-btn" type="button">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <span id="sidebar-theme-label">深色外观</span>
+        </button>
+        <button id="sidebar-logout-btn" class="sidebar-util-btn danger-text" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          <span>导入本地数据库</span>
+        </button>
+      </div>
+    </aside>
+
+    <!-- 移动端悬浮液态玻璃顶栏（仅在主 Tab 显示） -->
+    <header id="mobile-header" class="mobile-header liquid-glass">
+      <div class="mobile-header-left">
+        <img src="/icon.svg" alt="" class="mobile-brand-icon">
+        <span id="mobile-page-title" class="mobile-page-title">摘要</span>
+      </div>
+      <div class="mobile-header-right">
+        <span id="mobile-sync-pill" class="sync-chip"><span class="sync-dot"></span><span id="mobile-sync-text">已同步</span></span>
+        <button id="mobile-theme-btn" class="liquid-pill icon-circle-btn" type="button" aria-label="切换浅色或深色主题">
+          <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+          <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- 移动端长下拉增量刷新指示胶囊 -->
+    <div id="ptr-indicator" class="ptr-indicator liquid-glass" aria-live="polite" aria-hidden="true">
+      <span class="ptr-icon-wrap" aria-hidden="true">
+        <svg class="ptr-ring-svg" viewBox="0 0 24 24" width="18" height="18">
+          <circle class="ptr-ring-track" cx="12" cy="12" r="8.5" />
+          <circle id="ptr-ring-fill" class="ptr-ring-fill" cx="12" cy="12" r="8.5" />
+        </svg>
+        <svg class="ptr-check-svg" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><polyline points="5 13 10 18 19 7"/></svg>
+      </span>
+      <span id="ptr-label" class="ptr-label">继续下拉增量刷新</span>
+    </div>
+
+    <!-- 主内容区 -->
+    <main class="main-content">
+      <!-- 顶级视图栈：专属指标详情页（从摘要 / 所有健康数据 / 浏览压栈进入） -->
+      <section id="metric-detail-view" class="tab-panel hidden" aria-label="健康指标详情">
+        <div class="detail-nav-bar">
+          <button id="detail-back-btn" class="liquid-pill circle-nav-btn detail-back-btn" type="button" aria-label="返回上一页">
+            <svg class="chev-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            <span id="detail-back-label" class="sr-only">摘要</span>
+          </button>
+          <div id="detail-nav-title" class="detail-nav-title">详情</div>
+          <button id="detail-theme-btn" class="liquid-pill circle-nav-btn icon-circle-btn" type="button" aria-label="切换主题">
+            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+        </div>
+
+        <div id="metric-detail-body" class="detail-body"></div>
+      </section>
+
+      <!-- 顶级视图栈：所有健康数据全览列表 -->
+      <section id="all-health-view" class="tab-panel hidden" aria-label="所有健康数据">
+        <div class="detail-nav-bar">
+          <button id="all-health-back-btn" class="liquid-pill circle-nav-btn detail-back-btn" type="button" aria-label="返回摘要">
+            <svg class="chev-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            <span class="sr-only">摘要</span>
+          </button>
+          <div id="all-health-nav-title" class="detail-nav-title">所有健康数据</div>
+          <button id="all-health-theme-btn" class="liquid-pill circle-nav-btn icon-circle-btn" type="button" aria-label="切换主题">
+            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+        </div>
+
+        <div id="all-health-body" class="detail-body"></div>
+      </section>
+
+      <!-- 顶级视图栈：准备度与洞察 -->
+      <section id="pro-insights-view" class="tab-panel hidden" aria-label="准备度与洞察">
+        <div class="detail-nav-bar">
+          <button id="pro-insights-back-btn" class="liquid-pill circle-nav-btn detail-back-btn" type="button" aria-label="返回上一页">
+            <svg class="chev-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            <span class="sr-only">返回</span>
+          </button>
+          <div id="pro-insights-nav-title" class="detail-nav-title">准备度与洞察</div>
+          <button id="pro-insights-theme-btn" class="liquid-pill circle-nav-btn icon-circle-btn" type="button" aria-label="切换主题">
+            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          </button>
+        </div>
+
+        <div id="pro-insights-body" class="detail-body"></div>
+      </section>
+
+      <!-- Tab 1: 摘要 (Apple Health Summary) -->
+      <section id="tab-summary" class="tab-panel">
+        <div class="page-head">
+          <div>
+            <h1 class="large-title">摘要</h1>
+            <p id="summary-date-sub" class="page-subtitle">正在载入最新健康记录...</p>
+          </div>
+          <span id="summary-sync-tag" class="desktop-sync-tag"></span>
+        </div>
+
+        <div class="hero-grid">
+          <div id="hero-rings-card" class="card hero-card interactive-card" role="button" tabindex="0"></div>
+          <div id="hero-sleep-card" class="card hero-card interactive-card" role="button" tabindex="0"></div>
+        </div>
+
+        <div id="summary-readiness-card" class="ah-card readiness-min-card" role="button" tabindex="0"></div>
+
+        <div class="section-head">
+          <h2>昨夜生命体征</h2>
+          <span id="vitals-status-tag" class="vitals-header-pill"></span>
+        </div>
+        <div id="summary-vitals-card" class="card vitals-card"></div>
+
+        <div class="section-head">
+          <h2>置顶</h2>
+          <button id="summary-browse-link" class="text-link-btn" type="button">所有分类 ›</button>
+        </div>
+        <dialog id="pin-editor-dialog" aria-labelledby="pin-editor-title">
+          <div class="card pin-editor-surface">
+            <div class="pin-editor-header">
+              <h2 id="pin-editor-title" class="card-title">编辑置顶</h2>
+              <button type="button" id="pin-editor-done" class="text-link-btn" autofocus>完成</button>
+            </div>
+            <div id="pin-editor"></div>
+          </div>
+        </dialog><div class="pin-editor-backdrop" aria-hidden="true"></div><div id="summary-cards-grid" class="summary-grid"></div>
+        <div class="summary-pin-actions"><button class="text-link-btn" id="edit-pins" aria-haspopup="dialog" aria-controls="pin-editor-dialog">编辑</button></div>
+        <button id="summary-all-data-btn" class="card interactive-card all-health-entry-btn" type="button">
+          <span>显示所有健康数据</span>
+          <span class="chev">›</span>
+        </button>
+
+        <div class="section-head">
+          <h2>提要</h2>
+        </div>
+        <div id="summary-highlights-stack" class="highlights-stack"></div>
+
+        <div class="section-head">
+          <h2>体能与跑力</h2>
+        </div>
+        <div id="summary-athletic-grid" class="summary-grid athletic-grid"></div>
+
+        <div class="section-head">
+          <h2>近期趋势</h2>
+          <span class="card-note">近 7 天 vs 近 30 天</span>
+        </div>
+        <div id="summary-trends-grid" class="trends-grid"></div>
+
+        <div class="section-head">
+          <h2>最近体能训练</h2>
+          <button id="summary-all-workouts-btn" class="text-link-btn" type="button">显示全部 ›</button>
+        </div>
+        <div id="summary-recent-workouts" class="card grouped-card"></div>
+      </section>
+
+      <!-- Tab 2: 体能训练 & GPS 轨迹 -->
+      <section id="tab-workouts" class="tab-panel hidden">
+        <div class="page-head">
+          <div>
+            <h1 class="large-title">体能训练</h1>
+            <p id="workouts-totals" class="page-subtitle"></p>
+          </div>
+          <button id="wo-pro-insights-btn" class="text-link-btn" type="button">负荷与效率 ›</button>
+        </div>
+
+        <div class="workouts-toolbar">
+          <div id="sport-filter-pills" class="h-scroll-pills"></div>
+        </div>
+
+        <div id="workouts-layout" class="workouts-layout">
+          <div id="workout-list" class="workout-list"></div>
+
+          <div id="workout-detail-card" class="workout-detail-panel">
+            <div id="wo-mobile-back-bar" class="wo-mobile-back-bar">
+              <button id="wo-back-btn" class="liquid-pill circle-nav-btn back-pill-btn" type="button" aria-label="返回体能训练">
+                <svg class="chev-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+                <span class="sr-only">体能训练</span>
+              </button>
+              <div id="wo-mobile-nav-title" class="detail-nav-title">训练详情</div>
+              <a id="wo-gpx-btn-mobile" class="liquid-pill pill-action-btn hidden" href="#"><span>导出 GPX</span></a>
+            </div>
+
+            <!-- Card 1: Apple Fitness 头部与双列彩色大字明细 -->
+            <div id="wo-apple-header-card" class="card fit-header-card">
+              <div class="fit-empty-msg">请选择左侧一条体能训练记录</div>
+            </div>
+
+            <!-- Card 2: 配速渐变 GPS 路线地图 -->
+            <div id="wo-map-card" class="card hidden">
+              <div class="card-header">
+                <div>
+                  <h3 class="card-title">路线</h3>
+                </div>
+                <div class="action-group">
+                  <button id="toggle-map-layer" class="ios-btn-secondary" type="button">切换底图</button>
+                  <a id="wo-gpx-btn" class="ios-btn-secondary" href="#">导出 GPX</a>
+                </div>
+              </div>
+              <div id="workout-map-wrap" class="map-wrap">
+                <div id="workout-map"></div>
+              </div>
+              <div class="pace-legend-row">
+                <span class="pace-legend-txt">慢</span>
+                <span class="pace-legend-bar"></span>
+                <span class="pace-legend-txt">快</span>
+              </div>
+            </div>
+
+            <div id="wo-view-switch" class="chart-mode hidden"><span>训练图表</span><button id="overlay-toggle" type="button" class="mini-pill-btn" aria-haspopup="dialog">横屏图表</button></div>
+            <div id="wo-pace-card" class="card hidden"></div>
+            <div id="wo-hr-card" class="card hidden"></div>
+            <div id="wo-ele-card" class="card hidden"></div>
+            <div id="wo-cadence-card" class="card hidden"></div>
+            <div id="wo-recovery" class="card hidden"></div>
+            <div id="wo-splits-card" class="card hidden"></div>
+            <div id="wo-biomech-card" class="card hidden"></div>
+            <div id="wo-balance-card" class="card hidden"></div>
+
+          </div>
+        </div>
+      </section>
+
+      <!-- Tab 3: 浏览 (Apple Health Categories + Daily Snapshot) -->
+      <section id="tab-browse" class="tab-panel hidden">
+        <div class="page-head">
+          <div>
+            <h1 class="large-title">浏览</h1>
+          </div>
+        </div>
+
+        <div class="card grouped-card" style="margin-bottom:14px;">
+          <button id="browse-pro-insights-btn" class="grouped-row" type="button">
+            <div class="grouped-row-left">
+              <div class="cat-icon-box" style="background:rgba(48,209,88,0.12);color:var(--apple-green)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5" stroke-opacity="0.28"/><path d="M12 3.5a8.5 8.5 0 1 1-6.5 13.9"/><path d="M9.2 12.4l2 2 4-4.6"/></svg>
+              </div>
+              <div>
+                <div class="grouped-title">准备度与洞察</div>
+              </div>
+            </div>
+            <div class="grouped-row-right">
+              <div id="browse-readiness-val" class="grouped-val">›</div>
+            </div>
+          </button>
+        </div>
+
+        <div class="section-head" style="margin-top:6px;">
+          <h2>健康类别</h2>
+        </div>
+        <div id="browse-categories" class="card grouped-card"></div>
+
+        <div class="section-head">
+          <h2>单日全景快照</h2>
+        </div>
+        <div class="day-controls">
+          <div class="day-nav-bar liquid-glass">
+            <button id="day-prev-btn" class="circle-step-btn" type="button" aria-label="前一天">‹</button>
+            <input id="day-picker" class="ios-date-input" type="date" aria-label="选择日期">
+            <button id="day-next-btn" class="circle-step-btn" type="button" aria-label="后一天">›</button>
+          </div>
+          <div id="recent-day-pills" class="h-scroll-pills"></div>
+        </div>
+        <div id="day-strip" class="day-metrics-grid"></div>
+      </section>
+
+      <!-- Tab 4: 更多与系统状态 -->
+      <section id="tab-more" class="tab-panel hidden">
+        <div class="page-head">
+          <div>
+            <h1 class="large-title">更多</h1>
+          </div>
+        </div>
+
+        <div class="settings-stack">
+          <div class="card">
+            <div class="card-header"><h2 class="card-title">数据与连接</h2></div>
+            <div class="settings-row settings-row-action">
+              <div><div class="row-title">数据与密钥导出</div><div class="row-sub">原始数据库、面板数据库与 SQLCipher 密钥</div></div>
+              <button class="liquid-pill pill-action-btn" id="data-export-settings" type="button">导出</button>
+            </div>
+            <div class="settings-row settings-row-action">
+              <div><div class="row-title">本地 MCP 服务</div><div class="row-sub">只读访问健康数据，默认仅本机</div></div>
+              <button class="liquid-pill pill-action-btn" id="mcp-service-settings" type="button">管理</button>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">外观与材质</h2>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="row-title">界面风格</div>
+                <div class="row-sub">iOS 26 Liquid Glass · 浅色默认 / OLED 纯黑夜间</div>
+              </div>
+              <div id="more-theme-segmented" class="segmented-control compact-seg liquid-seg">
+                <button class="seg-btn" data-theme-val="light" type="button">浅色</button>
+                <button class="seg-btn" data-theme-val="dark" type="button">OLED 深色</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" id="local-auto-sync-card">
+            <div class="card-header">
+              <h2 class="card-title">华为运动健康自动同步</h2>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="row-title">打开应用时自动同步</div>
+                <div class="row-sub">启动或切回前台时通过 Root 检查并增量更新数据</div>
+              </div>
+              <div id="more-autosync-segmented" class="segmented-control compact-seg liquid-seg">
+                <button class="seg-btn active" data-autosync-val="1" type="button">开启</button>
+                <button class="seg-btn" data-autosync-val="0" type="button">关闭</button>
+              </div>
+            </div>
+            <div class="settings-row">
+              <div>
+                <div class="row-title">密钥缓存状态</div>
+                <div id="local-sync-status-msg" class="row-sub">准备就绪</div>
+              </div>
+              <span id="local-key-status" class="card-note">尚未缓存</span>
+            </div>
+            <div class="local-sync-actions">
+              <button id="local-sync-now-btn" class="ios-btn-secondary" type="button">立即同步</button>
+              <button id="local-rekey-btn" class="ios-btn-secondary" type="button">重新获取密钥</button>
+              <button id="local-open-hwh-btn" class="ios-btn-secondary hidden" type="button">打开华为运动健康</button>
+            </div>
+          </div>
+
+          <div class="card grouped-card">
+            <button id="more-onboarding-btn" class="grouped-row" type="button" style="border-bottom:0;">
+              <div class="grouped-row-left">
+                <div class="cat-icon-box" style="background:rgba(0,122,255,0.12);color:var(--apple-blue)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+                </div>
+                <div>
+                  <div class="grouped-title">首次使用指南</div>
+                  <div class="row-sub">Root 授权、自动恢复密钥与长下拉增量刷新说明</div>
+                </div>
+              </div>
+              <div class="grouped-row-right">
+                <div class="grouped-val">›</div>
+              </div>
+            </button>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">本地数据库统计</h2>
+            </div>
+            <div id="sys-status-box" class="kv-list"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2 class="card-title">已关联设备（已脱敏）</h2>
+            </div>
+            <div id="sys-devices-box" class="table-wrap"></div>
+          </div>
+
+          <button id="more-logout-btn" class="local-action-full" type="button">手动导入本地数据库</button>
+          <button id="more-clear-btn" class="ios-btn-danger" type="button">清除本地数据与缓存密钥</button>
+        </div>
+      </section>
+    </main>
+
+    <!-- 移动端 iOS 26 悬浮液态玻璃胶囊底栏（方案 A：4 栏） -->
+    <nav id="bottom-dock" class="bottom-dock liquid-glass" aria-label="移动端主导航">
+      <div class="bottom-dock-inner">
+        <div id="dock-indicator" class="dock-indicator" aria-hidden="true"></div>
+        <button class="bottom-tab-btn active" data-tab="summary" data-idx="0" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path class="tab-heart-path" d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          <span>摘要</span>
+        </button>
+        <button class="bottom-tab-btn" data-tab="workouts" data-idx="1" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="13" cy="5" r="2"/><path d="M7 21l3-6 2.5 1.5L15 21"/><path d="M6 12l4-3 3 2 4-3"/><path d="M10 9l-1 5"/></svg>
+          <span>体能训练</span>
+        </button>
+        <button class="bottom-tab-btn" data-tab="browse" data-idx="2" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="8" height="8" rx="2.2"/><rect x="13" y="3" width="8" height="8" rx="2.2"/><rect x="3" y="13" width="8" height="8" rx="2.2"/><rect x="13" y="13" width="8" height="8" rx="2.2"/></svg>
+          <span>浏览</span>
+        </button>
+        <button class="bottom-tab-btn" data-tab="more" data-idx="3" type="button">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h.09a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v.09a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          <span>更多</span>
+        </button>
+      </div>
+    </nav>
+  </div>
+
+  <!-- Apple Health 风格首次使用指导 -->
+  <dialog id="onboarding-dialog" class="onboarding-dialog" aria-labelledby="onboarding-title">
+    <div class="onboarding-surface">
+      <div class="onboarding-scroll">
+        <div class="onboarding-hero">
+          <img src="/icon.svg" alt="健康" class="onboarding-logo">
+          <h2 id="onboarding-title" class="onboarding-title">欢迎使用健康面板</h2>
+          <p class="onboarding-sub">100% 本地离线 · Apple Health 风格健康看板</p>
+          <div id="onboarding-live-strip" class="onboarding-live-strip">
+            <span class="onboarding-live-dot"></span>
+            <span id="onboarding-live-text">正在检测本机同步状态…</span>
+          </div>
+        </div>
+
+        <ol class="onboarding-steps">
+          <li class="onboarding-step">
+            <div class="onboarding-step-icon" style="background:rgba(255,45,85,0.12);color:var(--apple-red)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="m9 12 2 2 4-4"/></svg>
+            </div>
+            <div class="onboarding-step-body">
+              <div class="onboarding-step-title">1. 授予 Root 权限</div>
+              <p class="onboarding-step-desc">在 KernelSU 或 Magisk 中允许本应用使用 Root 权限，以便安全读取本机华为运动健康数据库快照。</p>
+            </div>
+          </li>
+          <li class="onboarding-step">
+            <div class="onboarding-step-icon" style="background:rgba(255,149,0,0.13);color:var(--apple-orange)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            </div>
+            <div class="onboarding-step-body">
+              <div class="onboarding-step-title">2. 首次打开一次华为运动健康</div>
+              <p class="onboarding-step-desc">首次恢复加密密钥需先打开「华为运动健康」等待手表数据刷新片刻，切回本面板即可自动完成解密与解析。</p>
+            </div>
+          </li>
+          <li class="onboarding-step">
+            <div class="onboarding-step-icon" style="background:rgba(0,122,255,0.12);color:var(--apple-blue)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 5v11"/><path d="m7 11 5 5 5-5"/><path d="M5 19h14"/></svg>
+            </div>
+            <div class="onboarding-step-body">
+              <div class="onboarding-step-title">3. 自动同步 · 长下拉增量刷新</div>
+              <p class="onboarding-step-desc">每次打开应用自动检测更新；在顶部页面向下长拉至绿环亮起后松开，可随时触发快速增量刷新。</p>
+            </div>
+          </li>
+          <li class="onboarding-step">
+            <div class="onboarding-step-icon" style="background:rgba(40,205,65,0.13);color:var(--apple-green)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2.5"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+            </div>
+            <div class="onboarding-step-body">
+              <div class="onboarding-step-title">4. 本地加密与按需联网</div>
+              <p class="onboarding-step-desc">密钥通过 Android Keystore 加密存储于本机，健康数据全程离线解析不上传（仅训练轨迹加载高德底图时联网），也可在「更多」中手动导入数据库。</p>
+            </div>
+          </li>
+        </ol>
+      </div>
+
+      <div class="onboarding-actions">
+        <button id="onboarding-primary-btn" class="onboarding-primary-btn" type="button">开始使用</button>
+        <div class="onboarding-secondary-row">
+          <button id="onboarding-open-hwh-btn" class="onboarding-link-btn hidden" type="button">打开华为运动健康</button>
+          <button id="onboarding-skip-btn" class="onboarding-link-btn" type="button">稍后再说</button>
+        </div>
+      </div>
+    </div>
+  </dialog>
+  <div class="onboarding-backdrop" aria-hidden="true"></div>
+
+  <!-- 通用液态玻璃选择器悬浮弹窗 -->
+  <dialog id="glass-select-dialog" class="glass-modal-dialog glass-select-dialog" aria-labelledby="glass-select-title">
+    <div class="glass-modal-surface">
+      <div class="glass-modal-header">
+        <div>
+          <h2 id="glass-select-title" class="glass-modal-title">选择分类</h2>
+          <p id="glass-select-sub" class="glass-modal-sub hidden"></p>
+        </div>
+        <button id="glass-select-close" class="glass-modal-close-btn" type="button" aria-label="完成">完成</button>
+      </div>
+      <label id="glass-select-port" class="glass-select-port hidden">
+        <span>端口</span>
+        <input id="glass-select-port-input" type="number" inputmode="numeric" min="1024" max="65535" step="1" required>
+      </label>
+      <div id="glass-select-list" class="glass-select-list" role="listbox"></div>
+    </div>
+  </dialog>
+  <div class="glass-modal-backdrop" aria-hidden="true"></div>
+
+  <!-- 训练指数说明液态玻璃悬浮窗 -->
+  <dialog id="training-info-dialog" class="glass-modal-dialog training-info-dialog" aria-labelledby="training-info-title">
+    <div class="glass-modal-surface">
+      <div class="glass-modal-header">
+        <div>
+          <h2 id="training-info-title" class="glass-modal-title">训练指数与负荷说明</h2>
+          <p class="glass-modal-sub">基于 Banister 冲量-反应模型与运动负荷比</p>
+        </div>
+        <button id="training-info-close" class="glass-modal-close-btn" type="button" aria-label="完成">完成</button>
+      </div>
+      <div id="training-info-body" class="training-info-scroll"></div>
+    </div>
+  </dialog>
+  <div class="glass-modal-backdrop" aria-hidden="true"></div>
+
+  <div id="toast" class="toast liquid-glass hidden" role="status" aria-live="polite"></div>
+
+  <script src="/static/vendor/leaflet.js"></script>
+  <script defer src="/static/dashboard-glass.js?v=11"></script>
+  <script src="/static/app.js?v=83"></script>
+</body>
+</html>

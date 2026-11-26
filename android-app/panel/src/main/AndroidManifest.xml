@@ -1,0 +1,28 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.VIBRATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <queries>
+        <package android:name="com.huawei.health" />
+    </queries>
+    <application android:allowBackup="false"
+        android:enableOnBackInvokedCallback="false"
+        android:icon="@drawable/ic_health"
+        android:label="健康面板 · 离线"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:usesCleartextTraffic="false">
+        <service android:name=".PanelMcpService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+        <activity android:name=".PanelActivity"
+            android:enableOnBackInvokedCallback="false"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
