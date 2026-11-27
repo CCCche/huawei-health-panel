@@ -6,7 +6,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
     <a href="#环境要求"><img src="https://img.shields.io/badge/Android-API%2031%2B%20(arm64--v8a)-3DDC84.svg" alt="Android" /></a>
     <a href="#环境要求"><img src="https://img.shields.io/badge/Root-Required-red.svg" alt="Root Required" /></a>
-    <a href="https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.8"><img src="https://img.shields.io/badge/Release-v1.0.8-orange.svg" alt="Release v1.0.8" /></a>
+    <a href="https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.9"><img src="https://img.shields.io/badge/Release-v1.0.9-orange.svg" alt="Release v1.0.9" /></a>
   </p>
 </div>
 
@@ -54,7 +54,7 @@
 
 ### 3. 配套独立解密工具与工程模块
 - [`decrypt_db.py`](decrypt_db.py)：独立 Python CLI 工具，支持通过 OpenSSL `libcrypto`（`ctypes`）离线解密华为运动健康 `hihealth_003.db`（SQLCipher 4：`PBKDF2-HMAC-SHA512`、`page_size=4096`、`reserve=80`），并可选 `--recover-key` 与 `--verify-all-hmac`。
-- [`android-app/panel`](android-app/panel)：核心主面板 APK（Kotlin + Chaquopy Python 3.12 + WebView + MCP Server），`v1.0.8`（`versionCode = 30`）。
+- [`android-app/panel`](android-app/panel)：核心主面板 APK（Kotlin + Chaquopy Python 3.12 + WebView + MCP Server），`v1.0.9`（`versionCode = 31`）。
 - [`android-app/offline`](android-app/offline)：轻量原生离线壳模块（Jetpack Compose + COUI-Kit + C 原生密钥恢复助推器）。
 - [`android-app/app`](android-app/app)：早期示例容器模块（已脱敏，域名与路径均为示例占位）。
 
@@ -106,7 +106,7 @@
 ## 快速开始
 
 ### 方式一：直接安装 Release APK（推荐）
-1. 前往 [Releases v1.0.8](https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.8) 下载 `health-panel-v1.0.8-vc30.apk`。
+1. 前往 [Releases v1.0.9](https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.9) 下载 `health-panel-v1.0.9-vc31.apk`。
 2. 在手机安装后打开 **Health Panel**：
    - 若设备已 Root 且安装有华为运动健康，点击同步即可自动定位/恢复密钥并解密导入 `hihealth_003.db`；
    - 或手动选择本地数据库副本进行导入分析。
@@ -189,6 +189,10 @@ cd android-app
 ---
 
 ## 更新日志
+
+### `v1.0.9`（`versionCode = 31`）
+
+- 页面原生滚动期间，卡片触摸光感使用 Android 提供的最新手指坐标，减少光点跟随手指时的停顿。
 
 ### `v1.0.8`（`versionCode = 30`）
 

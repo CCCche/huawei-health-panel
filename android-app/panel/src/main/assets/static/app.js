@@ -10158,8 +10158,20 @@
     clear(Boolean(immediate));
   };
 
+  let hasNativeSample = false;
+  window.__panelLightSample = (nx, ny) => {
+    if (typeof pointer !== "string" || pull?.active) return;
+    hasNativeSample = true;
+    x = nx * window.innerWidth;
+    y = ny * window.innerHeight;
+    bounds = null;
+    scrollMoved = true;
+    if (!frame) frame = requestAnimationFrame(paint);
+  };
+
   const options = { passive: true, capture: true };
   window.addEventListener("touchstart", event => {
+    hasNativeSample = false;
     draggedCard = null;
     if (event.touches.length > 1) {
       clear();
@@ -10190,7 +10202,7 @@
           window.__panelPtr?.onMove(Math.max(0, dy));
         }
       }
-      if (id === pointer && !pull?.active) move(point);
+      if (id === pointer && !pull?.active && !hasNativeSample) move(point);
     }
   }, options);
   for (const type of ["touchend", "touchcancel"]) {

@@ -19,6 +19,7 @@ import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.VibratorManager
 import android.text.InputType
+import android.view.MotionEvent
 import android.view.HapticFeedbackConstants
 import android.view.View
 import android.view.WindowManager
@@ -243,6 +244,39 @@ class PanelActivity : ComponentActivity() {
             isHorizontalScrollBarEnabled = false
             scrollBarStyle = View.SCROLLBARS_INSIDE_OVERLAY
             overScrollMode = View.OVER_SCROLL_NEVER
+            // Chromium coalesces DOM touchmove events during compositor scrolling.
+            // Keep only the latest native sample and at most one outstanding delivery.
+            var latestX = 0f
+            var latestY = 0f
+            var dirty = false
+            var scheduled = false
+            var inFlight = false
+            fun scheduleLightSample() {
+                if (!dirty || scheduled || inFlight) return
+                scheduled = true
+                postOnAnimation {
+                    scheduled = false
+                    if (!dirty || width <= 0 || height <= 0 || !isAttachedToWindow) return@postOnAnimation
+                    dirty = false
+                    inFlight = true
+                    evaluateJavascript("window.__panelLightSample?.(${latestX / width},${latestY / height})") {
+                        inFlight = false
+                        scheduleLightSample()
+                    }
+                }
+            }
+            setOnTouchListener { _, event ->
+                if (event.actionMasked == MotionEvent.ACTION_MOVE && event.pointerCount == 1 &&
+                    event.getToolType(0) == MotionEvent.TOOL_TYPE_FINGER) {
+                    latestX = event.x
+                    latestY = event.y
+                    dirty = true
+                    scheduleLightSample()
+                } else {
+                    dirty = false
+                }
+                false
+            }
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.allowFileAccess = false
