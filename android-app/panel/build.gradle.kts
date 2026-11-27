@@ -121,8 +121,8 @@ android {
         applicationId = "xyz.orachen.health.panel"
         minSdk = 31
         targetSdk = 36
-        versionCode = 25
-        versionName = "1.0.3"
+        versionCode = 30
+        versionName = "1.0.8"
         ndk { abiFilters += "arm64-v8a" }
     }
     packaging {

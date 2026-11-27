@@ -6,7 +6,7 @@
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
     <a href="#环境要求"><img src="https://img.shields.io/badge/Android-API%2031%2B%20(arm64--v8a)-3DDC84.svg" alt="Android" /></a>
     <a href="#环境要求"><img src="https://img.shields.io/badge/Root-Required-red.svg" alt="Root Required" /></a>
-    <a href="https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.2"><img src="https://img.shields.io/badge/Release-v1.0.2-orange.svg" alt="Release v1.0.2" /></a>
+    <a href="https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.8"><img src="https://img.shields.io/badge/Release-v1.0.8-orange.svg" alt="Release v1.0.8" /></a>
   </p>
 </div>
 
@@ -54,7 +54,7 @@
 
 ### 3. 配套独立解密工具与工程模块
 - [`decrypt_db.py`](decrypt_db.py)：独立 Python CLI 工具，支持通过 OpenSSL `libcrypto`（`ctypes`）离线解密华为运动健康 `hihealth_003.db`（SQLCipher 4：`PBKDF2-HMAC-SHA512`、`page_size=4096`、`reserve=80`），并可选 `--recover-key` 与 `--verify-all-hmac`。
-- [`android-app/panel`](android-app/panel)：核心主面板 APK（Kotlin + Chaquopy Python 3.12 + WebView + MCP Server），`v1.0.2`（`versionCode = 24`）。
+- [`android-app/panel`](android-app/panel)：核心主面板 APK（Kotlin + Chaquopy Python 3.12 + WebView + MCP Server），`v1.0.8`（`versionCode = 30`）。
 - [`android-app/offline`](android-app/offline)：轻量原生离线壳模块（Jetpack Compose + COUI-Kit + C 原生密钥恢复助推器）。
 - [`android-app/app`](android-app/app)：早期示例容器模块（已脱敏，域名与路径均为示例占位）。
 
@@ -106,7 +106,7 @@
 ## 快速开始
 
 ### 方式一：直接安装 Release APK（推荐）
-1. 前往 [Releases v1.0.2](https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.2) 下载 `health-panel-v1.0.2-vc24.apk`。
+1. 前往 [Releases v1.0.8](https://github.com/CCCche/huawei-health-panel/releases/tag/v1.0.8) 下载 `health-panel-v1.0.8-vc30.apk`。
 2. 在手机安装后打开 **Health Panel**：
    - 若设备已 Root 且安装有华为运动健康，点击同步即可自动定位/恢复密钥并解密导入 `hihealth_003.db`；
    - 或手动选择本地数据库副本进行导入分析。
@@ -189,6 +189,11 @@ cd android-app
 ---
 
 ## 更新日志
+
+### `v1.0.8`（`versionCode = 30`）
+
+- 优化 WebView 卡片预加载、页面复用和原生滚动时的触摸光感。
+- 修复卡片转场期间导航栏模糊消失，以及从摘要进入训练详情后返回时底栏选中项回弹的问题。
 
 ### `v1.0.3`（`versionCode = 25`）
 - **骑行速度曲线与非跑步有氧效率优化**：骑行详情页的曲线、概览（平均速度 / 最佳速度）、分段与列表统一改为速度（`km/h`，支持高速骑行轨迹）；骑行与游泳的有氧效率卡片去掉“跑姿”文案并隐藏非相关跑姿漂移项。

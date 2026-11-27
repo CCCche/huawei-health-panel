@@ -28,7 +28,8 @@
   let preloadRunning = false;
   let preloadResumeTimer = null;
   let preloadWakeFn = null;
-  let lastUserInputAt = 0;
+  let lastUserInputAt = performance.now();
+  let firstOverviewPaintAt = null;
   function cacheMapSet(map, key, val, maxSize = 24) {
     if (map.has(key)) map.delete(key);
     map.set(key, val);
@@ -75,15 +76,17 @@
   function isPreloadPaused() {
     return Boolean(
       activeCt ||
-      prewarmingCt ||
       restoringNavigation ||
       localSyncState.busy ||
       document.hidden ||
-      (performance.now() - lastUserInputAt < 320)
+      (firstOverviewPaintAt !== null && performance.now() - firstOverviewPaintAt < 1800) ||
+      (performance.now() - lastUserInputAt < 650)
     );
   }
 
   function resumeSecondaryPreload() {
+    // A paused queue still needs its scheduled wake-up after input or sync.
+    if (isPreloadPaused()) return;
     if (preloadResumeTimer) {
       clearTimeout(preloadResumeTimer);
       preloadResumeTimer = null;
@@ -222,12 +225,38 @@
     }, { high: true });
   }
 
+  // Begin the exact pending request on contact so the click can reuse it.
+  document.addEventListener("pointerdown", event => {
+    if (!event.isPrimary || event.button !== 0 || activeCt || restoringNavigation) return;
+    const card = event.target.closest?.("[data-metric], [data-wid], [data-ecg-id], #summary-readiness-card, #browse-pro-insights-btn");
+    if (!card || !card.closest(".main-content")) return;
+    if (card.dataset.wid) {
+      fetchWorkoutData(card.dataset.wid).catch(() => {});
+    } else if (card.matches("#summary-readiness-card, #browse-pro-insights-btn")) {
+      fetchProInsightsData().catch(() => {});
+    } else {
+      const metric = normalizeTemperatureMetric(card.dataset.ecgId ? "ecg_record" : card.dataset.metric);
+      const day = card.matches(".day-tile");
+      const scope = day ? "D" : card.matches(".trend-card") ? "M" :
+        card.matches(".vitals-row") ? (metric === "sleep" ? "D" : "W") :
+        card.dataset.scope || defaultMetricScope(metric);
+      fetchMetricData({ metric, scope, endDate: day ? selectedDay : card.dataset.endDate,
+        ecgId: card.dataset.ecgId }).catch(() => {});
+    }
+  }, { passive: true, capture: true });
+
   function scheduleSecondaryPreload(data) {
     if (!data || data.empty) return;
     preloadQueue = [];
     preloadScheduledKeys.clear();
     const refDate = data.latest_day?.date || data.window?.end_date || "";
     const slpDate = data.latest_night_sleep?.date || refDate;
+
+    // The two primary cards are visible immediately. Warm their dated keys
+    // without waiting for the idle queue that also builds hidden DOM.
+    for (const [metric, endDate] of [["activity", refDate], ["sleep", slpDate]]) {
+      fetchMetricData({ metric, scope: "D", endDate }).catch(() => {});
+    }
 
     // Stage 1: Primary Level-2 Summary Cards & Hidden DOM Pre-render
     enqueuePreloadTask("dom:all-health", async (epoch) => {
@@ -727,8 +756,9 @@
 
   function triggerChartMotion(el, cls = "chart-crossfade") {
     if (!el || !cls) return;
+    const replay = el.classList.contains(cls);
     el.classList.remove("chart-slide-prev", "chart-slide-next", "chart-crossfade");
-    void el.offsetWidth;
+    if (replay) void el.offsetWidth;
     el.classList.add(cls);
   }
 
@@ -820,7 +850,7 @@
   function resizeAllCharts() {
     Object.values(charts).forEach((c) => {
       try {
-        c.resize();
+        if (c.getDom().getClientRects().length) c.resize();
       } catch (_) {}
     });
     if (leafletMap) {
@@ -1366,6 +1396,7 @@
   }
 
   function activateBottomTab(targetTab) {
+    markPreloadUserInput();
     if (!targetTab) return;
     setDockCompact(false);
     if (targetTab === "workouts") {
@@ -1400,7 +1431,7 @@
     dock.addEventListener("pointerdown", (e) => {
       if (e.button !== undefined && e.button !== 0) return;
       if (active && activePointerId !== null) return;
-      if ((activeCt && activeCt.opening) || prewarmingCt || restoringNavigation) return;
+      if ((activeCt && activeCt.opening) || restoringNavigation) return;
       active = true;
       activePointerId = e.pointerId;
       moved = false;
@@ -1479,7 +1510,7 @@
           dockBtns.forEach((b) => b.classList.toggle("active", b.dataset.tab === currentTab));
         }
       } else if (!cancelled && Math.abs(e.clientY - startY) < 48) {
-        if ((activeCt && activeCt.opening) || prewarmingCt || restoringNavigation) return;
+        if ((activeCt && activeCt.opening) || restoringNavigation) return;
         const hitBtn = e.target instanceof Element ? e.target.closest(".bottom-tab-btn") : null;
         let targetTab = hitBtn?.dataset?.tab || startBtn?.dataset?.tab || "";
         if (!targetTab) {
@@ -1509,7 +1540,7 @@
       const y = Math.max(0, window.scrollY);
       const delta = y - previousY;
       previousY = y;
-      if (restoringNavigation || activeCt || prewarmingCt) {
+      if (restoringNavigation || activeCt) {
         travel = 0;
         return;
       }
@@ -1538,19 +1569,11 @@
   let lastNativeCanGoBack = null;
   const originByDepth = new Map();
   let activeCt = null;
-  let prewarmingCt = false;
   let pendingPostTransitionResize = false;
   const CT_OPEN_DURATION = 380;
   const CT_OPEN_BEZIER = [0.22, 0.90, 0.24, 1];
   const CT_CLOSE_DURATION = 340;
   const CT_CLOSE_BEZIER = [0.22, 0.88, 0.28, 1];
-  const CT_PREWARM_MS = 140;
-  const CT_GLASS_PENDING_SELECTOR =
-    ":is(.card, .ah-card, .highlight-card, .hl-insight-card, .metric-card, .trend-card, " +
-    ".wo-list-item, .apple-chart-card, .nap-card, .all-data-btn, .fitness-week-card, " +
-    ".fitness-big-rings-card, .hourly-mini-card, .heatmap-card, .race-pred-tile, " +
-    ".day-tile, .wo-card-btn, .grouped-card):not(details):not(.dashboard-card-glass)";
-
   function solveCubicBezierY(x, x1, y1, x2, y2) {
     if (x <= 0) return 0;
     if (x >= 1) return 1;
@@ -1592,13 +1615,13 @@
   }
 
   function syncNativeBackState(force = false) {
-    const canGoBack = Boolean(getTopmostOpenDialog() || activeCt || prewarmingCt || restoringNavigation || navigationRoute.depth > 0);
+    const canGoBack = Boolean(getTopmostOpenDialog() || activeCt || restoringNavigation || navigationRoute.depth > 0);
     if (!force && canGoBack === lastNativeCanGoBack) return;
     lastNativeCanGoBack = canGoBack;
     window.__panelNative?.setCanGoBack?.(canGoBack);
   }
   window.__syncNativeBackState = syncNativeBackState;
-  window.__isPanelTransitionBusy = () => Boolean(activeCt || prewarmingCt || restoringNavigation);
+  window.__isPanelTransitionBusy = () => Boolean(activeCt || restoringNavigation);
   syncNativeBackState(true);
 
   if (typeof MutationObserver === "function" && document.body) {
@@ -1627,7 +1650,7 @@
       history.back();
       return;
     }
-    if (activeCt || prewarmingCt) return;
+    if (activeCt) return;
     syncNativeBackState(true);
     window.__panelNative?.finishFromBack?.();
   };
@@ -1712,23 +1735,6 @@
     return Math.max(16, Math.min(28, Number.isFinite(rawRadius) && rawRadius > 0 ? rawRadius : 20));
   }
 
-  function computeMorphGeometry(rect, radius, vw, vh) {
-    const cardCx = rect.left + rect.width / 2;
-    const cardCy = rect.top + rect.height / 2;
-    const maxLocalHalfW = Math.max(1, Math.min(cardCx, vw - cardCx));
-    const maxLocalHalfH = Math.max(1, Math.min(cardCy, vh - cardCy));
-    const s0 = Math.min(
-      1,
-      Math.max(0.86, (rect.width / 2) / maxLocalHalfW, (rect.height / 2) / maxLocalHalfH)
-    );
-    const l0 = Math.max(0, cardCx - (rect.width / 2) / s0);
-    const r0 = Math.max(0, vw - (cardCx + (rect.width / 2) / s0));
-    const t0 = Math.max(0, cardCy - (rect.height / 2) / s0);
-    const b0 = Math.max(0, vh - (cardCy + (rect.height / 2) / s0));
-    const rad0 = radius / s0;
-    return { cardCx, cardCy, s0, l0, r0, t0, b0, rad0 };
-  }
-
   function getUntransformedDomRect(el) {
     const domRect = el.getBoundingClientRect();
     const layoutW = el.offsetWidth;
@@ -1811,7 +1817,6 @@
     sheet.style.clipPath = "";
     sheet.style.opacity = "";
     sheet.style.animation = "";
-    sheet.scrollTop = 0;
     syncCtAnimatingClass();
   }
 
@@ -1841,10 +1846,11 @@
   }
 
   function animateCardSheet(sheet, origin, opening, finish, held = null) {
-    const geom = computeMorphGeometry(origin.rect, origin.radius, window.innerWidth, window.innerHeight);
-    if (!held) sheet.style.transformOrigin = `${geom.cardCx}px ${geom.cardCy}px`;
-    const cardPose = { t: geom.t0, r: geom.r0, b: geom.b0, l: geom.l0, rad: geom.rad0, s: geom.s0, op: 0 };
-    const fullPose = { t: 0, r: 0, b: 0, l: 0, rad: 0, s: 1, op: 1 };
+    // Keep the glass at device scale and animate only its visible bounds.
+    const {left, top, width, height} = origin.rect;
+    const cardPose = { t: top, r: window.innerWidth - left - width,
+      b: window.innerHeight - top - height, l: left, rad: origin.radius, op: 0 };
+    const fullPose = { t: 0, r: 0, b: 0, l: 0, rad: 0, op: 1 };
     const startPose = held ? { ...held.pose } : (opening ? cardPose : fullPose);
     const endPose = opening ? fullPose : cardPose;
     const duration = opening ? CT_OPEN_DURATION :
@@ -1852,15 +1858,12 @@
     const bezier = opening ? CT_OPEN_BEZIER : CT_CLOSE_BEZIER;
 
     let startTime = null;
-    let waitFrames = 0;
 
     const formatClipPath = (pose) =>
       `inset(${pose.t.toFixed(2)}px ${pose.r.toFixed(2)}px ${pose.b.toFixed(2)}px ${pose.l.toFixed(2)}px round ${pose.rad.toFixed(2)}px)`;
-    const formatScale = (s) => `scale(${s.toFixed(5)})`;
 
     const applyPose = (pose) => {
       sheet.style.clipPath = formatClipPath(pose);
-      sheet.style.transform = formatScale(pose.s);
       sheet.style.opacity = pose.op.toFixed(4);
     };
 
@@ -1889,7 +1892,6 @@
         b: lerp(startPose.b, endPose.b),
         l: lerp(startPose.l, endPose.l),
         rad: lerp(startPose.rad, endPose.rad),
-        s: lerp(startPose.s, endPose.s),
         op,
       };
     };
@@ -1913,7 +1915,10 @@
         } finally {
           // Swap views while the departing layer still has its final clip
           // and opacity. Release it only after it is no longer visible.
-          if (commit) resetCardSheet(sheet);
+          if (commit) {
+            resetCardSheet(sheet);
+            if (opening) window.scrollTo({ top: 0, behavior: "instant" });
+          }
         }
       },
     };
@@ -1944,8 +1949,8 @@
         const easingStr = `cubic-bezier(${bezier[0]}, ${bezier[1]}, ${bezier[2]}, ${bezier[3]})`;
         const geomAnim = sheet.animate(
           [
-            { clipPath: formatClipPath(startPose), transform: formatScale(startPose.s) },
-            { clipPath: formatClipPath(endPose), transform: formatScale(endPose.s) },
+            { clipPath: formatClipPath(startPose) },
+            { clipPath: formatClipPath(endPose) },
           ],
           { duration, easing: easingStr, fill: "both" },
         );
@@ -1983,38 +1988,18 @@
       }
     };
 
-    let openGlassSettled = false;
-    const waitBeforeStart = (now) => {
-      if (activeCt !== transition) return;
-      waitFrames += 1;
-      if (opening) {
-        const hasPendingGlass = Boolean(sheet.querySelector(CT_GLASS_PENDING_SELECTOR));
-        if (!openGlassSettled && (!hasPendingGlass || waitFrames >= 3)) {
-          openGlassSettled = true;
-          transition.frameId = requestAnimationFrame(waitBeforeStart);
-          return;
-        }
-        if (!openGlassSettled && waitFrames < 4) {
-          transition.frameId = requestAnimationFrame(waitBeforeStart);
-          return;
-        }
-      } else if (waitFrames < 2) {
-        transition.frameId = requestAnimationFrame(waitBeforeStart);
-        return;
-      }
-      launch(now);
-    };
+    // WAAPI applies its first keyframe before the next paint. Starting both
+    // effects now lets Chromium prepare their layers in the same transaction.
+    launch(performance.now());
 
-    transition.frameId = requestAnimationFrame(waitBeforeStart);
-    transition.timer = setTimeout(complete, duration + 450);
   }
 
   // Source cards and dock buttons remain visible behind the moving sheet.
   // Ignore taps there until the navigation transaction is done.
   window.addEventListener("click", (event) => {
-    if (!(activeCt || prewarmingCt || restoringNavigation) || !(event.target instanceof Element)) return;
+    if (!(activeCt || restoringNavigation) || !(event.target instanceof Element)) return;
     if (!event.target.closest("#app-shell") || event.target.closest("dialog")) return;
-    if (event.target.closest("#bottom-dock") && activeCt && !activeCt.opening && !prewarmingCt && !restoringNavigation) return;
+    if (event.target.closest("#bottom-dock") && activeCt && !activeCt.opening && !restoringNavigation) return;
     event.preventDefault();
     event.stopImmediatePropagation();
   }, true);
@@ -2027,6 +2012,7 @@
     if (!canUseContainerTransform() || !rect || !targetEl) {
       prepare?.();
       onFinish?.();
+      window.scrollTo({ top: 0, behavior: "instant" });
       return Promise.resolve(true);
     }
 
@@ -2036,8 +2022,8 @@
     if (targetEl === $("workout-detail-card") && $("tab-workouts").classList.contains("hidden")) {
       $("tab-workouts").classList.add("ct-keep-mounted");
     }
-    targetEl.scrollTop = 0;
     prepare?.();
+    // The opening layer clips at the top and cannot retain a scroll offset.
     return new Promise((resolve) => {
       animateCardSheet(targetEl, { rect, radius: originMeta.radius }, true, (commit) => {
         try {
@@ -2290,12 +2276,12 @@
             p.classList.toggle("hidden", p.id !== "tab-workouts");
           });
           document.querySelectorAll(".nav-item, .bottom-tab-btn").forEach((b) => {
-            b.classList.toggle("active", b.dataset.tab === "workouts");
+            b.classList.toggle("active", b.dataset.tab === prevOrigin.tab);
           });
-          updateDockPosition("workouts");
+          updateDockPosition(prevOrigin.tab);
           const mTitleEl = $("mobile-page-title");
           if (mTitleEl) mTitleEl.textContent = TAB_TITLES.workouts || "体能训练";
-          window.scrollTo({ top: 0, behavior: "instant" });
+
           if (!workoutsCache || workoutsRenderedKey !== "|1") {
             loadWorkouts("", { skipDetail: true }).catch(() => {});
           }
@@ -2384,7 +2370,7 @@
       if (!overviewCache) {
         await loadOverview(30);
         tabDidRender = true;
-      } else if (!restoringNavigation || summaryRenderedRef !== overviewCache) {
+      } else if (summaryRenderedRef !== overviewCache) {
         renderSummaryTab(overviewCache);
         tabDidRender = true;
       }
@@ -2403,7 +2389,7 @@
       if (!overviewCache) {
         await loadOverview(30);
         tabDidRender = true;
-      } else if (!restoringNavigation || browseRenderedRef !== overviewCache) {
+      } else if (browseRenderedRef !== overviewCache) {
         renderBrowseCategories(overviewCache);
         tabDidRender = true;
       }
@@ -2417,7 +2403,7 @@
         await loadOverview(30);
         tabDidRender = true;
       }
-      if (!restoringNavigation || !$("sys-status-box")?.childElementCount) {
+      if (!$("sys-status-box")?.childElementCount) {
         renderMoreTab();
         tabDidRender = true;
       }
@@ -2489,7 +2475,7 @@
             if (p !== ahView) p.classList.add("hidden");
           });
           ahView.classList.remove("hidden");
-          window.scrollTo({ top: 0, behavior: "instant" });
+
         },
       });
       return;
@@ -2574,23 +2560,8 @@
     else if (piView) piView.classList.remove("no-anim-replay");
 
     if (originMeta && piView) {
-      let prewarmedPro = proInsightsCache && !proInsightsCache.empty ? proInsightsCache : null;
-      let proFetchPromise = null;
-      if (!prewarmedPro) {
-        prewarmingCt = true;
-        syncNativeBackState();
-        try {
-          proFetchPromise = fetchProInsightsData();
-          const waited = await Promise.race([
-            proFetchPromise.catch(() => null),
-            new Promise((resolve) => setTimeout(() => resolve(null), CT_PREWARM_MS)),
-          ]);
-          if (waited && !waited.empty) prewarmedPro = waited;
-        } finally {
-          prewarmingCt = false;
-          syncNativeBackState();
-        }
-      }
+      const prewarmedPro = proInsightsCache && !proInsightsCache.empty ? proInsightsCache : null;
+      const proFetchPromise = prewarmedPro ? null : fetchProInsightsData();
       const afterOpening = runContainerOpenTransition({
         targetEl: piView,
         originMeta,
@@ -2614,7 +2585,7 @@
             if (p !== piView) p.classList.add("hidden");
           });
           piView.classList.remove("hidden");
-          window.scrollTo({ top: 0, behavior: "instant" });
+
         },
       });
       if (!prewarmedPro || prewarmedPro.empty) {
@@ -2654,6 +2625,10 @@
     return p;
   }
 
+  function canPopulateOpening(sheet) {
+    return activeCt?.opening && activeCt.sheet === sheet && !restoringNavigation;
+  }
+
   async function fetchAndRenderProInsights(opts = {}) {
     const piBody = $("pro-insights-body");
     if (!proInsightsCache && piBody && !opts.afterOpening) {
@@ -2662,7 +2637,7 @@
     const route = navigationRoute;
     try {
       const data = await (opts.fetchPromise || fetchProInsightsData());
-      if (opts.afterOpening && !(await opts.afterOpening)) return;
+      if (opts.afterOpening && !canPopulateOpening($("pro-insights-view")) && !(await opts.afterOpening)) return;
       if (proInsightsOpen && route === navigationRoute) {
         const canReuse = Boolean(
           proInsightsRenderedRef === data &&
@@ -2796,22 +2771,8 @@
       const stateRef = detailState;
       const routeRef = navigationRoute;
       const request = ++metricRequest;
-      let prewarmedData = metricQueryCache.get(metricQueryKey(stateRef)) || null;
-      let fetchPromise = null;
-      if (!prewarmedData) {
-        prewarmingCt = true;
-        syncNativeBackState();
-        try {
-          fetchPromise = fetchMetricData(stateRef);
-          prewarmedData = await Promise.race([
-            fetchPromise.catch(() => null),
-            new Promise((resolve) => setTimeout(() => resolve(null), CT_PREWARM_MS)),
-          ]);
-        } finally {
-          prewarmingCt = false;
-          syncNativeBackState();
-        }
-      }
+      const prewarmedData = metricQueryCache.get(metricQueryKey(stateRef)) || null;
+      const fetchPromise = prewarmedData ? null : fetchMetricData(stateRef);
       if (restoringNavigation || request !== metricRequest || detailState !== stateRef || navigationRoute !== routeRef) {
         return;
       }
@@ -2822,7 +2783,7 @@
           if (p !== mdView) p.classList.add("hidden");
         });
         mdView.classList.remove("hidden");
-        window.scrollTo({ top: 0, behavior: "instant" });
+
         setTimeout(resizeAllCharts, 40);
       };
       if (prewarmedData) {
@@ -2926,7 +2887,7 @@
       }
       return;
     }
-    if (opts.afterOpening && !(await opts.afterOpening)) return;
+    if (opts.afterOpening && !canPopulateOpening($("metric-detail-view")) && !(await opts.afterOpening)) return;
     if (request !== metricRequest || state !== detailState) return;
     detailDataCache = data;
     if (detailState) {
@@ -3276,6 +3237,7 @@
     renderBrowseCategories(data);
     renderMoreTab();
     renderLocalSyncUI();
+    firstOverviewPaintAt ??= performance.now();
     scheduleSecondaryPreload(data);
     return true;
   }
@@ -4927,6 +4889,7 @@
     const actGoal = 12;
 
     const heroRingsEl = $("hero-rings-card");
+    Object.assign(heroRingsEl.dataset, {metric: "activity", scope: "D", endDate: refDate});
     heroRingsEl.innerHTML = `
       <div class="hero-top">
         <span class="hero-cat" style="color:var(--apple-red)">
@@ -4972,6 +4935,7 @@
     const slpHrv = slp.avg_hrv ?? pickLatestValid(daysDesc, (d) => d.hrv_avg ?? d.hrv_last).value;
 
     const heroSleepEl = $("hero-sleep-card");
+    Object.assign(heroSleepEl.dataset, {metric: "sleep", scope: "D", endDate: slpDate});
     heroSleepEl.innerHTML = `
       <div class="hero-top">
         <span class="hero-cat" style="color:var(--apple-indigo)">
@@ -6394,8 +6358,7 @@
 
     const records = data.records || [];
     const sourceByMetric={sleep:"睡眠会话与分期 · 跨午夜按会话归属，小睡单列",hrv:"设备报告的 HRV · 分时记录为 RMSSD（毫秒）",steps:"小时步数合计 · 同小时合并",heart_rate:"心率点采样或时段汇总 · 次/分",spo2:"血氧点采样或时段汇总 · %"};
-    const sourceRows=(data.source_points||[]).map(r=>`<div class="kv-row"><span>${escapeHtml(r.ts_iso.slice(11,19))}</span><strong>${fmtNum(r.value,1)} ${escapeHtml(r.unit)}</strong></div>`).join("");
-    const recordsHtml = `<details class="card source-note"><summary>数据来源与统计口径</summary><p>华为运动健康 · ${escapeHtml(sourceByMetric[data.metric] || data.title+" · 设备记录与周期汇总")}</p><p>${escapeHtml(data.range_label)} · 同一指标同一时间戳更新覆盖。同步记录未附单条设备编号。</p>${sourceRows?`<details><summary>查看 ${data.source_points.length} 条同步记录</summary><div class="source-scroll">${sourceRows}</div></details>`:""}</details>
+    const recordsHtml = `<details class="card source-note"><summary>数据来源与统计口径</summary><p>华为运动健康 · ${escapeHtml(sourceByMetric[data.metric] || data.title+" · 设备记录与周期汇总")}</p><p>${escapeHtml(data.range_label)} · 同一指标同一时间戳更新覆盖。同步记录未附单条设备编号。</p>${data.source_points?.length?`<details id="metric-source-records"><summary>查看 ${data.source_points.length} 条同步记录</summary><div class="source-scroll"></div></details>`:""}</details>
       <div class="${lowerAnimCls}" style="--card-idx:${cardSeq++}">
         <button id="toggle-all-data-btn" class="all-data-btn" type="button">
           <span>查看本期记录</span>
@@ -6404,13 +6367,7 @@
         <div id="all-data-drawer" class="accordion-drawer">
           <div class="accordion-inner">
             <div class="card all-data-list" style="margin-top:0;">
-              <div class="kv-list">
-                ${
-                  records.length
-                    ? records.map((r) => `<div class="kv-row"><span class="kv-k">${escapeHtml(r.time)} · ${escapeHtml(r.label)}</span><span class="kv-v">${escapeHtml(r.value)}</span></div>`).join("")
-                    : '<div class="card-note">当前周期暂无原始采样记录</div>'
-                }
-              </div>
+              <div class="kv-list"></div>
             </div>
           </div>
         </div>
@@ -6604,11 +6561,22 @@
     const ecgLink = $("heart-detail-ecg");
     if (ecgLink) ecgLink.onclick = () => openMetricDetail("ecg", { fromTab: detailState?.fromTab });
     if (navDir !== "resize") {
+      const sourceDetails = $("metric-source-records");
+      if (sourceDetails) sourceDetails.ontoggle = () => {
+        if (!sourceDetails.open) return;
+        sourceDetails.querySelector(".source-scroll").innerHTML = (data.source_points||[]).map(r=>`<div class="kv-row"><span>${escapeHtml(r.ts_iso.slice(11,19))}</span><strong>${fmtNum(r.value,1)} ${escapeHtml(r.unit)}</strong></div>`).join("");
+        sourceDetails.ontoggle = null;
+      };
       const toggleAllBtn = $("toggle-all-data-btn");
       if (toggleAllBtn) {
         toggleAllBtn.addEventListener("click", () => {
           const dr = $("all-data-drawer");
-          if (dr) dr.classList.toggle("open");
+          if (dr?.classList.toggle("open")) {
+            const list = dr.querySelector(".kv-list");
+            if (!list.firstElementChild) list.innerHTML = records.length
+                    ? records.map((r) => `<div class="kv-row"><span class="kv-k">${escapeHtml(r.time)} · ${escapeHtml(r.label)}</span><span class="kv-v">${escapeHtml(r.value)}</span></div>`).join("")
+                    : '<div class="card-note">当前周期暂无原始采样记录</div>';
+          }
           toggleAllBtn.classList.toggle("open");
         });
       }
@@ -9806,22 +9774,8 @@
     const routeRef = navigationRoute;
     let afterOpening = null;
     if (openMobileDetail && originMeta) {
-      let prewarmedData = workoutQueryCache.get(String(wid)) || null;
-      let fetchPromise = null;
-      if (!prewarmedData) {
-        prewarmingCt = true;
-        syncNativeBackState();
-        try {
-          fetchPromise = fetchWorkoutData(wid);
-          prewarmedData = await Promise.race([
-            fetchPromise.catch(() => null),
-            new Promise((resolve) => setTimeout(() => resolve(null), CT_PREWARM_MS)),
-          ]);
-        } finally {
-          prewarmingCt = false;
-          syncNativeBackState();
-        }
-      }
+      const prewarmedData = workoutQueryCache.get(String(wid)) || null;
+      const fetchPromise = prewarmedData ? null : fetchWorkoutData(wid);
       if (restoringNavigation || request !== workoutRequest || navigationRoute !== routeRef) return;
 
       const finishMobileOpen = () => {
@@ -9831,7 +9785,7 @@
         } else {
           $("workouts-layout").classList.add("mobile-detail-open");
           $("app-shell").classList.add("wo-detail-active");
-          window.scrollTo({ top: 0, behavior: "instant" });
+
         }
       };
 
@@ -9888,12 +9842,12 @@
         }
         return;
       }
-      if (!(await afterOpening)) return;
-      if (request !== workoutRequest) return;
+      if (!canPopulateOpening($("workout-detail-card")) && !(await afterOpening)) return;
+      if (request !== workoutRequest || routeRef !== navigationRoute) return;
       workoutDetailCache = data;
       renderWorkoutDetailCards(data, true);
       sealOneShotAnimations($("workout-detail-card"));
-      refitWorkoutMap();
+      if (await afterOpening && request === workoutRequest && routeRef === navigationRoute) refitWorkoutMap();
       return;
     }
     const data = await fetchWorkoutData(wid);
@@ -10056,7 +10010,7 @@
 
 /* Keep the touch light clipped to the glass surface that received the gesture. */
 (() => {
-  const selector = ".dashboard-card-glass, .has-library-glass, .main-content details.card, .pin-editor-surface";
+  const selector = ".main-content :is(.card, .ah-card, .highlight-card, .hl-insight-card, .metric-card, .trend-card, .wo-list-item, .apple-chart-card, .nap-card, .all-data-btn, .fitness-week-card, .fitness-big-rings-card, .hourly-mini-card, .heatmap-card, .race-pred-tile, .day-tile, .wo-card-btn, .grouped-card):not(details), .has-library-glass, .main-content details.card, .pin-editor-surface";
   const layer = document.createElement("span");
   layer.className = "glass-touch-layer";
   layer.setAttribute("aria-hidden", "true");
@@ -10068,11 +10022,10 @@
   const edgeGlow = glow.cloneNode();
   rim.append(edgeGlow);
   layer.append(rim);
-  const scrollOffsets = new Map();
   const horizontal = { value: 0, velocity: 0 };
   const vertical = { value: 0, velocity: 0 };
   let lastPaint = null;
-  let lastVerticalScroll = -Infinity;
+  let scrollMoved = false;
 
   function advance(axis, target, elapsed, rate) {
     const distance = axis.value - target;
@@ -10087,48 +10040,11 @@
     }
     return true;
   }
-  let offsetX = 0;
-  let offsetY = 0;
-  let position = "";
   let previousTransform = "";
   let isLit = false;
-  const managedScroll = CSS.supports("touch-action", "none");
-  document.documentElement.classList.toggle("dashboard-touch-scroll", managedScroll);
-  const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
-  let manualScroll = null;
-  let coastFrame = 0;
+  let pull = null;
   let draggedCard = null;
   let draggedAt = -Infinity;
-
-  function stopCoasting() {
-    cancelAnimationFrame(coastFrame);
-    coastFrame = 0;
-  }
-
-  function coast(velocity, scroller) {
-    if (reduceMotion.matches || Math.abs(velocity) < .14) return;
-    let previous = performance.now();
-    let remainder = 0;
-    function step(now) {
-      const dt = Math.max(0, Math.min(32, now - previous));
-      previous = now;
-      const decay = Math.exp(-dt / 180);
-      remainder += velocity * 180 * (1 - decay);
-      velocity *= decay;
-      const pixels = Math.trunc(remainder);
-      remainder -= pixels;
-      if (pixels) {
-        const before = scroller.scrollTop;
-        scroller.scrollBy({ top: pixels, behavior: "instant" });
-        if (scroller.scrollTop === before) {
-          coastFrame = 0;
-          return;
-        }
-      }
-      coastFrame = Math.abs(velocity) > .035 ? requestAnimationFrame(step) : 0;
-    }
-    coastFrame = requestAnimationFrame(step);
-  }
 
   function roundedRectPath(x, y, width, height, radius) {
     const r = Math.min(radius, width / 2, height / 2);
@@ -10148,13 +10064,11 @@
     frame = 0;
     if (!surface?.isConnected) return;
     bounds ||= surface.getBoundingClientRect();
-    const targetX = x - bounds.left + offsetX;
-    const targetY = y - bounds.top + offsetY;
-    const nativeVerticalScroll = position !== "sticky" && now - lastVerticalScroll < 100;
-    const lockedY = nativeVerticalScroll && lastPaint !== null ? vertical.value : targetY;
+    const targetX = x - bounds.left;
+    const targetY = y - bounds.top;
     const tolerance = isLit ? 4 : 0;
     const inside = targetX >= -tolerance && targetX <= bounds.width + tolerance
-      && lockedY >= -tolerance && lockedY <= bounds.height + tolerance;
+      && targetY >= -tolerance && targetY <= bounds.height + tolerance;
     if (isLit !== inside) {
       isLit = inside;
       layer.classList.toggle("is-releasing", !inside);
@@ -10164,7 +10078,8 @@
       lastPaint = null;
       return;
     }
-    if (lastPaint === null) {
+    if (lastPaint === null || scrollMoved) {
+      scrollMoved = false;
       horizontal.value = targetX;
       horizontal.velocity = 0;
       vertical.value = targetY;
@@ -10173,7 +10088,7 @@
     const elapsed = Math.min(.032, Math.max(.001, (now - (lastPaint ?? now)) / 1000));
     lastPaint = now;
     const movingX = advance(horizontal, targetX, elapsed, 52);
-    const movingY = !nativeVerticalScroll && advance(vertical, targetY, elapsed, 36);
+    const movingY = advance(vertical, targetY, elapsed, 36);
     const localX = horizontal.value;
     const localY = vertical.value;
     const nearEdge = Math.min(localX, localY, bounds.width - localX, bounds.height - localY) < 120;
@@ -10209,18 +10124,9 @@
     }
     pointer = id;
     bounds = null;
-    position = getComputedStyle(surface).position;
     previousTransform = "";
-    offsetX = 0;
-    offsetY = 0;
     lastPaint = null;
-    lastVerticalScroll = -Infinity;
-    scrollOffsets.clear();
-    if (position !== "fixed" && !surface.closest("dialog[open]")) {
-      for (let ancestor = surface.parentElement; ancestor; ancestor = ancestor.parentElement) {
-        scrollOffsets.set(ancestor, [ancestor.scrollLeft, ancestor.scrollTop]);
-      }
-    }
+    scrollMoved = false;
     bounds = surface.getBoundingClientRect();
     const width = layer.clientWidth;
     const height = layer.clientHeight;
@@ -10237,7 +10143,8 @@
   }
 
   function clear(immediate = false) {
-    manualScroll = null;
+    if (pull?.active) window.__panelPtr?.onCancelDrag();
+    pull = null;
     pointer = null;
     bounds = null;
     cancelAnimationFrame(frame);
@@ -10248,13 +10155,11 @@
     layer.classList.remove("visible");
   }
   window.__clearGlassTouchLight = (immediate = false) => {
-    stopCoasting();
     clear(Boolean(immediate));
   };
 
   const options = { passive: true, capture: true };
   window.addEventListener("touchstart", event => {
-    stopCoasting();
     draggedCard = null;
     if (event.touches.length > 1) {
       clear();
@@ -10264,107 +10169,41 @@
     if (!point || !(event.target instanceof Element)) return;
     const id = "touch-" + point.identifier;
     const target = event.target;
-    if (managedScroll && !window.__isPanelTransitionBusy?.() && target.closest(".main-content") && !target.closest(".leaflet-container, .training-overlay, input[type='range']")) {
-      let scroller = document.scrollingElement;
-      let horizontalScroller = null;
-      for (let element = target; element && !element.matches(".main-content"); element = element.parentElement) {
-        if (!horizontalScroller && element.scrollWidth > element.clientWidth + 1
-          && /auto|scroll/.test(getComputedStyle(element).overflowX)) horizontalScroller = element;
-        if (element.scrollHeight > element.clientHeight + 1 && /auto|scroll/.test(getComputedStyle(element).overflowY)) {
-          scroller = element;
-          break;
-        }
-      }
-      const appShell = document.getElementById("app-shell");
-      const canPull = Boolean(
-        window.__panelPtr &&
-        scroller === document.scrollingElement &&
-        scroller.scrollTop <= 2 &&
-        appShell &&
-        !appShell.classList.contains("detail-active") &&
-        !appShell.classList.contains("wo-detail-active") &&
-        !document.querySelector("dialog[open]") &&
-        !target.closest(".svg-chart-wrap, .apple-svg-chart, .h-scroll-pills")
-      );
-      manualScroll = {
-        id, target, scroller, horizontalScroller, axis: null,
-        startX: point.clientX, startY: point.clientY, previousX: point.clientX, previousY: point.clientY,
-        previousTime: performance.now(), velocity: 0,
-        canPull, ptrActive: false, pullAnchorY: point.clientY
-      };
+    const shell = target.closest("#app-shell");
+    if (window.__isPanelTransitionBusy?.()) return;
+    if (shell && window.scrollY <= 2 && target.closest(".main-content") &&
+        !shell.matches(".detail-active, .wo-detail-active") &&
+        !target.closest("dialog, .leaflet-container, .training-overlay, input, .svg-chart-wrap, .apple-svg-chart, .h-scroll-pills, .workout-list, .table-wrap, .heatmap-scroll")) {
+      pull = { id, x: point.clientX, y: point.clientY, active: false, target };
     }
-    if (!window.__isPanelTransitionBusy?.()) show(target, id, point);
+    show(target, id, point);
   }, options);
   window.addEventListener("touchmove", event => {
     for (const point of event.changedTouches) {
       const id = "touch-" + point.identifier;
-      const gesture = manualScroll;
-      if (gesture?.id === id) {
-        if (!gesture.axis) {
-          const dx = Math.abs(point.clientX - gesture.startX);
-          const dy = Math.abs(point.clientY - gesture.startY);
-          const horizontalControl = gesture.horizontalScroller || gesture.target.closest(".svg-chart-wrap, .apple-svg-chart");
-          if (horizontalControl && Math.max(dx, dy) >= 6) {
-            gesture.axis = dy >= dx ? "vertical" : "horizontal";
-          } else if (dy >= 6) {
-            gesture.axis = "vertical";
-          }
-        }
-        if (gesture.axis === "vertical" && gesture.scroller) {
-          if (gesture.ptrActive) {
-            const rawPull = point.clientY - gesture.pullAnchorY;
-            if (rawPull > 0) {
-              window.__panelPtr?.onMove(rawPull);
-              gesture.previousY = point.clientY;
-            } else {
-              gesture.ptrActive = false;
-              window.__panelPtr?.onCancelDrag();
-              const delta = gesture.previousY - point.clientY;
-              gesture.previousTime = performance.now();
-              gesture.previousY = point.clientY;
-              gesture.scroller.scrollBy({ top: delta, behavior: "instant" });
-            }
-          } else if (gesture.canPull && gesture.scroller.scrollTop <= 2 && (point.clientY - gesture.startY) > 16) {
-            gesture.ptrActive = true;
-            gesture.pullAnchorY = point.clientY - 16;
-            window.__panelPtr?.onMove(16);
-            gesture.previousY = point.clientY;
-          } else {
-            const now = performance.now();
-            const delta = gesture.previousY - point.clientY;
-            const elapsed = Math.max(5, now - gesture.previousTime);
-            const velocity = Math.max(-3, Math.min(3, delta / elapsed));
-            gesture.velocity = gesture.velocity * .55 + velocity * .45;
-            gesture.previousTime = now;
-            gesture.previousY = point.clientY;
-            gesture.scroller.scrollBy({ top: delta, behavior: "instant" });
-          }
-        } else if (gesture.axis === "horizontal" && gesture.horizontalScroller && !gesture.target.closest(".svg-chart-wrap, .apple-svg-chart, .ecg-grid-scroll")) {
-          gesture.horizontalScroller.scrollLeft += gesture.previousX - point.clientX;
-          gesture.previousX = point.clientX;
+      if (pull?.id === id) {
+        const dy = point.clientY - pull.y;
+        if (!pull.active && (dy < -6 || Math.abs(point.clientX - pull.x) > Math.max(8, dy) || window.scrollY > 2)) {
+          pull = null;
+        } else if (dy > 16 || pull.active) {
+          pull.active = true;
+          window.__panelPtr?.onMove(Math.max(0, dy));
         }
       }
-      if (id === pointer && !gesture?.ptrActive) move(point);
+      if (id === pointer && !pull?.active) move(point);
     }
   }, options);
   for (const type of ["touchend", "touchcancel"]) {
     window.addEventListener(type, event => {
       for (const point of event.changedTouches) {
         const id = "touch-" + point.identifier;
-        if (manualScroll?.id === id) {
-          const gesture = manualScroll;
-          if (gesture.ptrActive) {
-            draggedCard = gesture.target.closest("button, a, summary, [role='button'], .dashboard-card-glass") || gesture.target;
+        if (pull?.id === id) {
+          if (pull.active) {
+            draggedCard = pull.target.closest("button, a, summary, [role='button'], .dashboard-card-glass") || pull.target;
             draggedAt = performance.now();
             window.__panelPtr?.onEnd(type === "touchend");
-          } else if (gesture.axis === "vertical" || (gesture.axis === "horizontal" && gesture.horizontalScroller)) {
-            draggedCard = gesture.target.closest("button, a, summary, [role='button'], .dashboard-card-glass") || gesture.target;
-            draggedAt = performance.now();
-            if (gesture.axis === "vertical" && gesture.scroller && type === "touchend" && draggedAt - gesture.previousTime < 80) {
-              coast(gesture.velocity, gesture.scroller);
-            }
           }
-          manualScroll = null;
+          pull = null;
         }
         if (id === pointer) clear();
       }
@@ -10381,30 +10220,11 @@
       if (event.pointerId === pointer) clear();
     }, options);
   }
-  window.addEventListener("scroll", event => {
+  window.addEventListener("scroll", () => {
     if (pointer === null) return;
-    const scroller = event.target === document ? document.scrollingElement : event.target;
-    const before = scrollOffsets.get(scroller);
-    if (!before) return;
-    const left = scroller.scrollLeft;
-    const top = scroller.scrollTop;
-    const deltaX = left - before[0];
-    const deltaY = top - before[1];
-    before[0] = left;
-    before[1] = top;
-    if (position === "sticky") {
-      bounds = null;
-      if (!frame) frame = requestAnimationFrame(paint);
-      return;
-    }
-    offsetX += deltaX;
-    offsetY += deltaY;
-    if (deltaY) {
-      lastVerticalScroll = performance.now();
-      vertical.velocity = 0;
-    }
-    // Native vertical panning already moves the card and its light together.
-    if (deltaX && !frame) frame = requestAnimationFrame(paint);
+    bounds = null;
+    scrollMoved = true;
+    if (!frame) frame = requestAnimationFrame(paint);
   }, options);
   window.addEventListener("click", event => {
     if (!event.detail || !draggedCard?.contains(event.target) || performance.now() - draggedAt > 350) return;
@@ -10412,7 +10232,6 @@
     event.stopPropagation();
     draggedCard = null;
   }, true);
-  window.addEventListener("wheel", stopCoasting, options);
   window.addEventListener("resize", clear, options);
   window.addEventListener("blur", clear);
 })();

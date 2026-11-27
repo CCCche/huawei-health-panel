@@ -256,10 +256,9 @@ html[data-theme="dark"] .icon-moon { display: none; }
   box-shadow: var(--lg-pill-shadow);
 }
 
-@supports (backdrop-filter: url(#lg-refract-pill)) {
-  .liquid-glass::before,
-  .liquid-pill::before {
-    backdrop-filter: url(#lg-refract-pill) blur(12px) saturate(195%);
+@media (max-width: 959px) {
+  .liquid-glass::before, .liquid-pill::before {
+    backdrop-filter: blur(9px) saturate(1.5);
   }
 }
 
@@ -4264,14 +4263,17 @@ body::before { background: var(--glass-wash); }
   box-shadow: var(--glass-edge);
 }
 
-.main-content .dashboard-card-glass {
-  position: relative;
-  isolation: isolate;
-  background: transparent;
-  border-color: var(--glass-rim);
-  box-shadow: var(--glass-edge);
-  backdrop-filter: none;
-  -webkit-backdrop-filter: none;
+/* Static card material shares one style and follows the host's own radius. */
+:root { --dashboard-card-tint: rgba(252, 252, 254, .38); }
+:root[data-theme="dark"] { --dashboard-card-tint: rgba(24, 28, 40, .46); }
+.main-content :is(.card, .ah-card, .highlight-card, .hl-insight-card, .metric-card, .trend-card, .wo-list-item, .apple-chart-card, .nap-card, .all-data-btn, .fitness-week-card, .fitness-big-rings-card, .hourly-mini-card, .heatmap-card, .race-pred-tile, .day-tile, .wo-card-btn, .grouped-card):not(details) {
+  background: var(--dashboard-card-tint);
+  box-shadow: var(--glass-outline-shadow);
+  backdrop-filter: blur(5px) saturate(1.15);
+}
+.main-content :is(.card, .ah-card, .highlight-card, .hl-insight-card, .metric-card, .trend-card, .wo-list-item, .apple-chart-card, .nap-card, .all-data-btn, .fitness-week-card, .fitness-big-rings-card, .hourly-mini-card, .heatmap-card, .race-pred-tile, .day-tile, .wo-card-btn, .grouped-card):not(details) :is(.card, .ah-card, .highlight-card, .hl-insight-card, .metric-card, .trend-card, .wo-list-item, .apple-chart-card, .nap-card, .all-data-btn, .fitness-week-card, .fitness-big-rings-card, .hourly-mini-card, .heatmap-card, .race-pred-tile, .day-tile, .wo-card-btn, .grouped-card):not(details) { backdrop-filter: none; }
+@media (prefers-reduced-transparency: reduce) {
+  .main-content :is(.card, .ah-card, .highlight-card, .hl-insight-card, .metric-card, .trend-card, .wo-list-item, .apple-chart-card, .nap-card, .all-data-btn, .fitness-week-card, .fitness-big-rings-card, .hourly-mini-card, .heatmap-card, .race-pred-tile, .day-tile, .wo-card-btn, .grouped-card):not(details) { background: var(--bg); backdrop-filter: none; }
 }
 
 #more-logout-btn.has-library-glass {
@@ -4596,10 +4598,8 @@ body::before { background: var(--glass-wash); }
   background: radial-gradient(circle, rgb(223 239 255 / .98), rgb(159 201 255 / .66) 37%, transparent 67%);
 }
 
-.dashboard-touch-scroll .main-content,
-.dashboard-touch-scroll .main-content :is(.workout-list, .h-scroll-pills, .table-wrap, .heatmap-scroll, .source-scroll, #pin-editor, .apple-stat-sub, .workout-scroll-text, #wo-post-scrub-label) {
-  touch-action: none;
-}
+.main-content { overscroll-behavior-y: contain; }
+html { overscroll-behavior-y: contain; }
 
 /* Map coordinates and route geometry are retained without network tiles. */
 #workout-map {
@@ -5430,27 +5430,16 @@ body::before { background: var(--glass-wash); }
   color: #FFFFFF;
 }
 
+/* Skip layout and paint of offscreen detail sections until they approach
+   the viewport. Remember actual heights once measured for return navigation. */
+#detail-lower-stack > :is(.card, .highlight-card, .stagger-card) {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 160px;
+}
+
 /* Rounded card expand and collapse */
 html.ct-animating {
   overflow-anchor: none;
-}
-
-html.ct-animating #app-shell :is(
-  .lg-backdrop,
-  .sidebar,
-  .card,
-  .metric-card,
-  .hero-card,
-  .apple-chart-card,
-  .ah-card,
-  .wo-list-item,
-  .trend-card,
-  .overlay-stage
-),
-html.ct-animating #app-shell .liquid-glass::before,
-html.ct-animating #app-shell .liquid-pill::before {
-  -webkit-backdrop-filter: none !important;
-  backdrop-filter: none !important;
 }
 
 html.ct-animating .glass-touch-layer,
@@ -5458,20 +5447,6 @@ html.ct-animating .glass-touch-layer .glass-touch-glow::before {
   opacity: 0 !important;
   animation: none !important;
   transition: none !important;
-}
-
-html.ct-animating :is(#mobile-header, #bottom-dock, .detail-nav-bar, .wo-mobile-back-bar) [data-lg-theme].dashboard-glass-surface.lg-root:not([data-transparency="opaque"]) > .lg-decoration .lg-tint {
-  --lg-tint-opacity: .72;
-  transition: none !important;
-}
-
-html.ct-animating[data-theme="dark"] :is(#mobile-header, #bottom-dock, .detail-nav-bar, .wo-mobile-back-bar) [data-lg-theme].dashboard-glass-surface.lg-root:not([data-transparency="opaque"]) > .lg-decoration .lg-tint {
-  --lg-tint-opacity: .78;
-}
-
-html.ct-animating :is(.interactive-card, .metric-card, .ah-card, .trend-card, .wo-list-item) {
-  transition: none !important;
-  transform: none !important;
 }
 
 @media (max-width: 959px) {
@@ -5498,6 +5473,26 @@ html.ct-animating :is(.interactive-card, .metric-card, .ah-card, .trend-card, .w
   will-change: transform, opacity, clip-path;
   contain: layout style paint;
   animation: none !important;
+}
+
+.sheet-contents { display: contents; }
+
+/* Keep glass and its sampled background together on a viewport-sized
+   surface. Only the enclosing clip changes during the morph. */
+.ct-sheet-layer.ct-at-top > .sheet-contents {
+  display: flow-root;
+  height: 100%;
+  margin-inline: -14px;
+  padding-inline: 14px;
+  overflow: clip;
+  background: var(--glass-wash), var(--bg);
+  transform: translateZ(0);
+  will-change: opacity;
+}
+
+.ct-sheet-layer.ct-at-top:has(> .sheet-contents) {
+  padding-bottom: 0 !important;
+  background-image: none !important;
 }
 
 .ct-sheet-layer.ct-at-top {
@@ -5877,4 +5872,10 @@ html.ct-animating :is(.interactive-card, .metric-card, .ah-card, .trend-card, .w
   font-size: 11px;
   line-height: 1.45;
   color: var(--text-2);
+}
+
+@media (max-width: 959px) {
+  :is(.detail-nav-bar, .wo-mobile-back-bar) .dashboard-glass-surface:not([data-transparency="opaque"]) .lg-backdrop {
+    backdrop-filter: blur(9px) saturate(1.3) contrast(1.05);
+  }
 }

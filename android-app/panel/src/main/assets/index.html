@@ -45,7 +45,7 @@
   <link rel="manifest" href="/manifest.json">
   <link rel="icon" type="image/png" href="/icon.png?v=1">
   <link rel="stylesheet" href="/static/dashboard-glass.css?v=1">
-  <link rel="stylesheet" href="/static/style.css?v=89">
+  <link rel="stylesheet" href="/static/style.css?v=93">
   <link rel="stylesheet" href="/static/vendor/leaflet.css">
 </head>
 <body>
@@ -137,53 +137,59 @@
     <main class="main-content">
       <!-- 顶级视图栈：专属指标详情页（从摘要 / 所有健康数据 / 浏览压栈进入） -->
       <section id="metric-detail-view" class="tab-panel hidden" aria-label="健康指标详情">
-        <div class="detail-nav-bar">
-          <button id="detail-back-btn" class="liquid-pill circle-nav-btn detail-back-btn" type="button" aria-label="返回上一页">
-            <svg class="chev-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-            <span id="detail-back-label" class="sr-only">摘要</span>
-          </button>
-          <div id="detail-nav-title" class="detail-nav-title">详情</div>
-          <button id="detail-theme-btn" class="liquid-pill circle-nav-btn icon-circle-btn" type="button" aria-label="切换主题">
-            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          </button>
-        </div>
+        <div class="sheet-contents">
+          <div class="detail-nav-bar">
+            <button id="detail-back-btn" class="liquid-pill circle-nav-btn detail-back-btn" type="button" aria-label="返回上一页">
+              <svg class="chev-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              <span id="detail-back-label" class="sr-only">摘要</span>
+            </button>
+            <div id="detail-nav-title" class="detail-nav-title">详情</div>
+            <button id="detail-theme-btn" class="liquid-pill circle-nav-btn icon-circle-btn" type="button" aria-label="切换主题">
+              <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+              <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+          </div>
 
-        <div id="metric-detail-body" class="detail-body"></div>
+          <div id="metric-detail-body" class="detail-body"></div>
+        </div>
       </section>
 
       <!-- 顶级视图栈：所有健康数据全览列表 -->
       <section id="all-health-view" class="tab-panel hidden" aria-label="所有健康数据">
-        <div class="detail-nav-bar">
-          <button id="all-health-back-btn" class="liquid-pill circle-nav-btn detail-back-btn" type="button" aria-label="返回摘要">
-            <svg class="chev-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-            <span class="sr-only">摘要</span>
-          </button>
-          <div id="all-health-nav-title" class="detail-nav-title">所有健康数据</div>
-          <button id="all-health-theme-btn" class="liquid-pill circle-nav-btn icon-circle-btn" type="button" aria-label="切换主题">
-            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          </button>
-        </div>
+        <div class="sheet-contents">
+          <div class="detail-nav-bar">
+            <button id="all-health-back-btn" class="liquid-pill circle-nav-btn detail-back-btn" type="button" aria-label="返回摘要">
+              <svg class="chev-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              <span class="sr-only">摘要</span>
+            </button>
+            <div id="all-health-nav-title" class="detail-nav-title">所有健康数据</div>
+            <button id="all-health-theme-btn" class="liquid-pill circle-nav-btn icon-circle-btn" type="button" aria-label="切换主题">
+              <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+              <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+          </div>
 
-        <div id="all-health-body" class="detail-body"></div>
+          <div id="all-health-body" class="detail-body"></div>
+        </div>
       </section>
 
       <!-- 顶级视图栈：准备度与洞察 -->
       <section id="pro-insights-view" class="tab-panel hidden" aria-label="准备度与洞察">
-        <div class="detail-nav-bar">
-          <button id="pro-insights-back-btn" class="liquid-pill circle-nav-btn detail-back-btn" type="button" aria-label="返回上一页">
-            <svg class="chev-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
-            <span class="sr-only">返回</span>
-          </button>
-          <div id="pro-insights-nav-title" class="detail-nav-title">准备度与洞察</div>
-          <button id="pro-insights-theme-btn" class="liquid-pill circle-nav-btn icon-circle-btn" type="button" aria-label="切换主题">
-            <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-            <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
-          </button>
-        </div>
+        <div class="sheet-contents">
+          <div class="detail-nav-bar">
+            <button id="pro-insights-back-btn" class="liquid-pill circle-nav-btn detail-back-btn" type="button" aria-label="返回上一页">
+              <svg class="chev-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+              <span class="sr-only">返回</span>
+            </button>
+            <div id="pro-insights-nav-title" class="detail-nav-title">准备度与洞察</div>
+            <button id="pro-insights-theme-btn" class="liquid-pill circle-nav-btn icon-circle-btn" type="button" aria-label="切换主题">
+              <svg class="icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
+              <svg class="icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+            </button>
+          </div>
 
-        <div id="pro-insights-body" class="detail-body"></div>
+          <div id="pro-insights-body" class="detail-body"></div>
+        </div>
       </section>
 
       <!-- Tab 1: 摘要 (Apple Health Summary) -->
@@ -580,7 +586,7 @@
   <div id="toast" class="toast liquid-glass hidden" role="status" aria-live="polite"></div>
 
   <script src="/static/vendor/leaflet.js"></script>
-  <script defer src="/static/dashboard-glass.js?v=12"></script>
-  <script src="/static/app.js?v=91"></script>
+  <script defer src="/static/dashboard-glass.js?v=15"></script>
+  <script src="/static/app.js?v=97"></script>
 </body>
 </html>
